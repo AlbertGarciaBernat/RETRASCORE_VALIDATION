@@ -233,8 +233,9 @@ Decisiones de operacionalización:
   `vmec_dico` y `hemorragia_masiva` representan las primeras 24 horas, tal como
   se definieron en el registro. La exportación no contiene una marca temporal
   que permita verificarlo paciente por paciente.
-- La correspondencia AIS empleada es: 1 cabeza, 4 tórax, 5 abdomen, 7
-  extremidad superior, 8 extremidad inferior y 9 lesiones externas/térmicas.
+- Se usan directamente mais1-mais6 con la correspondencia del código actual;
+  su equivalencia anatómica y la interpretación de vacíos requieren confirmar
+  el diccionario del registro, no solo comparar porcentajes.
 
 ```{r}
 # Funciones auxiliares ------------------------------------------------------
@@ -295,6 +296,8 @@ dias_hasta_muerte <- as.numeric(
 )
 fecha_muerte_valida <- !is.na(dias_hasta_muerte) & dias_hasta_muerte >= 0
 
+# Sobrevivir más allá del día 30 se considera supervivencia a 30 días,
+# aunque el paciente fallezca posteriormente: no se excluyen esas muertes.
 mortalidad_30d <- case_when(
   mortalidad_intrahospitalaria == 0 ~ 0L,
   mortalidad_intrahospitalaria == 1 &
@@ -373,6 +376,11 @@ trauma_penetrante <- case_when(
 )
 
 mecanismo_limpio <- limpiar_texto(df$mecanismo)
+# Agrupación solicitada: otros y desconocido constituyen una categoría única.
+# Los vacíos siguen siendo NA y no se incorporan a esta categoría.
+mecanismo_limpio[mecanismo_limpio %in% c(
+  "otro", "otros", "desconocido"
+)] <- "otros/desconocido"
 intencionalidad_limpia <- limpiar_texto(df$intencionalidad)
 
 tipo_lesion_categoria <- factor(
@@ -399,7 +407,7 @@ tipo_lesion_categoria <- factor(
 
 mecanismo_alto_riesgo <- case_when(
   mecanismo_limpio %in% c(
-    "arma de fuego", "atropello", "caida accidental", "desconocido"
+    "arma de fuego", "atropello", "caida accidental", "otros/desconocido"
   ) ~ 1L,
   mecanismo_limpio == "precipitacion" &
     intencionalidad_limpia == "intencionado : autolisis" ~ 1L,
@@ -518,6 +526,7 @@ cohorte_retrascore <- data.frame(
   iot_prehospitalaria = iot_prehospitalaria_binaria,
   trauma_penetrante = trauma_penetrante,
   tipo_lesion = tipo_lesion_categoria,
+  mecanismo_agrupado = mecanismo_limpio,
   mecanismo_alto_riesgo = mecanismo_alto_riesgo,
   pupilas = pupilas_categoria,
   gcs_total = gcs_total,
@@ -605,14 +614,48 @@ resumen_ausentes_cohorte <- resumen_ausentes_cohorte[
 resumen_ausentes_cohorte
 ```
 
-# 4. Características de las cohortes de derivación y validación
+# 4. Cohorte analítica del artículo y tabla descriptiva
 
-La tabla reproduce la estructura descriptiva de la Tabla 1 del artículo.
-Se muestran medianas (rango intercuartílico) o porcentajes, sin valores p.
+Se utiliza el periodo 2015-2019: derivación 2015-2017 y validación 2018-2019.
+La cohorte elegible requiere mortalidad intrahospitalaria conocida. El análisis
+requiere además outcome a 30 días y las 20 candidatas completos, sin imputación
+estadística. Se mantiene la recodificación previa de vacíos MAIS a cero.
+La tabla descriptiva y todos los modelos usan los mismos casos completos.
 
 ```{r}
-datos_tabla_1 <- cohorte_retrascore %>%
+candidatas_paper <- c(
+  "edad_categoria", "genero_masculino", "precoag",
+  "atencion_prehospitalaria_medica", "iot_prehospitalaria",
+  "trauma_penetrante", "mecanismo_alto_riesgo", "pupilas",
+  "gcs_menor_igual_8", "mais_cabeza", "mais_torax", "mais_abdomen",
+  "mais_ext_superior", "mais_ext_inferior", "mais_externo",
+  "fallo_hemodinamico", "fallo_respiratorio", "coagulopatia_24h",
+  "ventilacion_mecanica", "hemorragia_masiva"
+)
+variables_regresion <- c("mortalidad_30d", "anio_trauma", candidatas_paper)
+cohorte_paper <- cohorte_retrascore %>%
   filter(anio_trauma >= 2015, anio_trauma <= 2019)
+casos_completos_paper <- complete.cases(cohorte_paper[variables_regresion])
+cohorte_analitica_paper <- cohorte_paper[casos_completos_paper, ]
+
+flujo_cohorte_paper <- do.call(rbind, lapply(
+  list(Derivacion = 2015:2017, Validacion = 2018:2019),
+  function(anios) {
+    d <- cohorte_paper[cohorte_paper$anio_trauma %in% anios, ]
+    completo <- complete.cases(d[variables_regresion])
+    data.frame(
+      periodo = paste(range(anios), collapse = "-"),
+      elegibles = nrow(d),
+      outcome_ausente = sum(is.na(d$mortalidad_30d)),
+      excluidos_por_cualquier_ausente = sum(!completo),
+      casos_completos = sum(completo)
+    )
+  }
+))
+rownames(flujo_cohorte_paper) <- NULL
+flujo_cohorte_paper
+
+datos_tabla_1 <- cohorte_analitica_paper
 
 tabla_1_derivacion <- datos_tabla_1 %>%
   filter(anio_trauma >= 2015, anio_trauma <= 2017)
@@ -754,259 +797,189 @@ names(tabla_caracteristicas_cohortes) <- c(
 tabla_caracteristicas_cohortes
 ```
 
-# 5. Descripción de los pacientes con GCS ausente
+# 5. Selección LASSO en la muestra de derivación
 
-La tabla compara los pacientes de derivación 2015-2017 con outcome a 30 días
-evaluable, sin realizar pruebas de hipótesis ni mostrar valores p.
+Se siguen los tres pasos solicitados: cohorte temporal, LASSO sobre 20
+candidatas y regresión logística sin penalización tras la selección.
+Fuente: [artículo RETRASCORE](https://link.springer.com/article/10.1186/s13054-021-03845-6).
 
-```{r}
-datos_tabla_gcs <- cohorte_retrascore %>%
-  filter(
-    anio_trauma >= 2015,
-    anio_trauma <= 2017,
-    !is.na(mortalidad_30d)
-  ) %>%
-  mutate(
-    grupo_gcs = ifelse(
-      is.na(gcs_total), "GCS ausente", "GCS presente"
-    ),
-    pupilas_anormales = ifelse(
-      is.na(pupilas), NA_integer_, as.integer(pupilas != "normal")
-    )
-  )
+Decisiones reproducibles propias: 10 particiones estratificadas por outcome,
+semilla 20260903, estandarización de predictores y selección de lambda.1se
+según deviance binomial. También se informa lambda.min, sin elegir entre
+ambas usando la validación 2018-2019. El texto principal del artículo no
+especifica esos ajustes. Si LASSO retiene alguna categoría de edad o pupilas,
+se conserva la variable categórica completa en la regresión posterior.
+No se fuerza la selección de las 13 variables publicadas.
 
-formatear_continua <- function(x) {
-  x <- x[!is.na(x)]
-  if (length(x) == 0) return("NA")
-  sprintf(
-    "%.1f [%.1f-%.1f]",
-    median(x),
-    quantile(x, 0.25),
-    quantile(x, 0.75)
-  )
-}
-
-formatear_binaria <- function(x) {
-  x <- x[!is.na(x)]
-  if (length(x) == 0) return("NA")
-  sprintf(
-    "%d/%d (%.1f%%)",
-    sum(x == 1),
-    length(x),
-    100 * mean(x == 1)
-  )
-}
-
-grupo_gcs_ausente <- datos_tabla_gcs %>%
-  filter(grupo_gcs == "GCS ausente")
-grupo_gcs_presente <- datos_tabla_gcs %>%
-  filter(grupo_gcs == "GCS presente")
-
-variables_continuas_gcs <- c(
-  edad = "Edad, años",
-  dias_estancia_uci = "Estancia UCI, días"
-)
-
-variables_binarias_gcs <- c(
-  genero_masculino = "Hombres",
-  mortalidad_30d = "Mortalidad a 30 días",
-  trauma_penetrante = "Trauma penetrante",
-  mecanismo_alto_riesgo = "Mecanismo de alto riesgo",
-  atencion_prehospitalaria_medica = "Atención prehospitalaria médica",
-  iot_prehospitalaria = "Intubación prehospitalaria",
-  pupilas_anormales = "Pupilas anormales",
-  mais_cabeza = "MAIS-cabeza",
-  mais_torax = "MAIS-tórax",
-  fallo_hemodinamico = "Fallo hemodinámico",
-  fallo_respiratorio = "Fallo respiratorio",
-  coagulopatia_24h = "Coagulopatía",
-  ventilacion_mecanica = "Ventilación mecánica",
-  hemorragia_masiva = "Hemorragia masiva"
-)
-
-tabla_gcs_continuas <- data.frame(
-  caracteristica = unname(variables_continuas_gcs),
-  gcs_ausente = vapply(
-    names(variables_continuas_gcs),
-    function(v) formatear_continua(grupo_gcs_ausente[[v]]),
-    character(1)
-  ),
-  gcs_presente = vapply(
-    names(variables_continuas_gcs),
-    function(v) formatear_continua(grupo_gcs_presente[[v]]),
-    character(1)
-  ),
-  row.names = NULL
-)
-
-tabla_gcs_binarias <- data.frame(
-  caracteristica = unname(variables_binarias_gcs),
-  gcs_ausente = vapply(
-    names(variables_binarias_gcs),
-    function(v) formatear_binaria(grupo_gcs_ausente[[v]]),
-    character(1)
-  ),
-  gcs_presente = vapply(
-    names(variables_binarias_gcs),
-    function(v) formatear_binaria(grupo_gcs_presente[[v]]),
-    character(1)
-  ),
-  row.names = NULL
-)
-
-tabla_caracteristicas_gcs <- rbind(
-  tabla_gcs_continuas,
-  tabla_gcs_binarias
-)
-
-n_gcs_ausente <- nrow(grupo_gcs_ausente)
-n_gcs_presente <- nrow(grupo_gcs_presente)
-
-data.frame(
-  grupo = c("GCS ausente", "GCS presente"),
-  n = c(n_gcs_ausente, n_gcs_presente)
-)
-tabla_caracteristicas_gcs
-```
-
-# 6. Regresión logística convencional
-
-Se ajusta directamente el modelo logístico con los predictores finales
-publicados, sin procedimientos adicionales de selección o penalización.
+Se mantienen las codificaciones actuales: MAIS desde mais1-mais6, vacíos
+MAIS como cero y otros/desconocido agrupados como alto riesgo por petición
+del usuario. Esta última agrupación no es la definición literal publicada.
+Los fallecimientos después de 30 días se consideran supervivientes a 30 días.
+Los traslados con desenlace hospitalario desconocido continúan excluidos.
+No se han añadido en esta fase las 100 particiones aleatorias ni los 1000
+bootstrap y el ajuste por contracción del artículo: los coeficientes siguientes
+son los de la regresión post-LASSO sin ese ajuste.
 
 ```{r}
-predictores_regresion <- c(
-  "edad_categoria",
-  "precoag",
-  "iot_prehospitalaria",
-  "mecanismo_alto_riesgo",
-  "pupilas",
-  "gcs_menor_igual_8",
-  "mais_cabeza",
-  "mais_torax",
-  "fallo_hemodinamico",
-  "fallo_respiratorio",
-  "coagulopatia_24h",
-  "ventilacion_mecanica",
-  "hemorragia_masiva"
-)
-
-variables_regresion <- c(
-  "mortalidad_30d", "anio_trauma", predictores_regresion
-)
-
-datos_regresion <- cohorte_retrascore[
-  complete.cases(cohorte_retrascore[variables_regresion]),
-  variables_regresion
-]
-
-datos_regresion$edad_categoria <- factor(
-  datos_regresion$edad_categoria,
-  levels = c("<50", "50-65", "66-75", ">75")
-)
-datos_regresion$pupilas <- factor(
-  datos_regresion$pupilas,
-  levels = c("normal", "midriasis unilateral", "midriasis bilateral")
-)
-
+if (!requireNamespace("glmnet", quietly = TRUE)) {
+  stop("Instala glmnet en RStudio antes de ejecutar este bloque.")
+}
+datos_regresion <- cohorte_analitica_paper
 datos_derivacion <- datos_regresion %>%
   filter(anio_trauma >= 2015, anio_trauma <= 2017)
-
 datos_validacion <- datos_regresion %>%
   filter(anio_trauma >= 2018, anio_trauma <= 2019)
+stopifnot(nrow(datos_derivacion) > 0, nrow(datos_validacion) > 0)
+stopifnot(length(unique(datos_derivacion$mortalidad_30d)) == 2,
+          length(unique(datos_validacion$mortalidad_30d)) == 2)
 
-formula_regresion <- mortalidad_30d ~
-  edad_categoria + precoag + iot_prehospitalaria +
-  mecanismo_alto_riesgo + pupilas + gcs_menor_igual_8 +
-  mais_cabeza + mais_torax + fallo_hemodinamico +
-  fallo_respiratorio + coagulopatia_24h + ventilacion_mecanica +
-  hemorragia_masiva
+formula_candidatas <- reformulate(candidatas_paper)
+matriz_diseno <- model.matrix(formula_candidatas, data = datos_derivacion)
+indices_terminos <- attr(matriz_diseno, "assign")[-1]
+terminos_candidatos <- attr(terms(formula_candidatas), "term.labels")
+x_lasso <- matriz_diseno[, -1, drop = FALSE]
+y_lasso <- datos_derivacion$mortalidad_30d
 
+set.seed(20260903)
+foldid <- integer(length(y_lasso))
+for (clase in c(0, 1)) {
+  indices <- which(y_lasso == clase)
+  stopifnot(length(indices) >= 10)
+  foldid[indices] <- sample(rep(1:10, length.out = length(indices)))
+}
+cv_lasso <- glmnet::cv.glmnet(
+  x = x_lasso, y = y_lasso, family = "binomial", alpha = 1,
+  foldid = foldid, type.measure = "deviance", standardize = TRUE
+)
+criterio_lambda <- "lambda.1se"
+beta_lasso <- as.matrix(coef(cv_lasso, s = criterio_lambda))[-1, 1]
+beta_lasso_min <- as.matrix(coef(cv_lasso, s = "lambda.min"))[-1, 1]
+tabla_seleccion_lasso <- data.frame(
+  variable = terminos_candidatos[indices_terminos],
+  termino = colnames(x_lasso),
+  beta_lasso = as.numeric(beta_lasso),
+  seleccionado = as.numeric(beta_lasso) != 0,
+  beta_lambda_min = as.numeric(beta_lasso_min),
+  row.names = NULL
+)
+predictores_regresion <- unique(
+  tabla_seleccion_lasso$variable[tabla_seleccion_lasso$seleccionado]
+)
+resumen_lasso <- data.frame(
+  n_derivacion = nrow(datos_derivacion),
+  candidatas = length(candidatas_paper),
+  columnas_diseno = ncol(x_lasso),
+  lambda_min = cv_lasso$lambda.min,
+  lambda_1se = cv_lasso$lambda.1se,
+  variables_seleccionadas = length(predictores_regresion)
+)
+resumen_lasso
+tabla_seleccion_lasso
+```
+
+# 6. Regresión logística posterior al LASSO
+
+Se reestiman los coeficientes de las variables seleccionadas exclusivamente
+en derivación. Se mantienen los mismos pacientes que en LASSO, aunque alguna
+variable candidata haya sido descartada. La validación no interviene en la
+selección ni en el ajuste.
+
+```{r}
+formula_regresion <- if (length(predictores_regresion)) {
+  reformulate(predictores_regresion, response = "mortalidad_30d")
+} else {
+  mortalidad_30d ~ 1
+}
 modelo_regresion_logistica <- glm(
   formula_regresion,
   data = datos_derivacion,
   family = binomial(link = "logit")
+)
+stopifnot(modelo_regresion_logistica$converged)
+if (anyNA(coef(modelo_regresion_logistica))) {
+  stop("Coeficientes no estimables: revisar colinealidad antes de validar.")
+}
+
+# Evaluación del modelo en derivación y validación temporal ----------------
+
+calcular_auc <- function(outcome, probabilidad) {
+  casos <- outcome == 1
+  controles <- outcome == 0
+  n_casos <- sum(casos)
+  n_controles <- sum(controles)
+
+  if (n_casos == 0 || n_controles == 0) return(NA_real_)
+
+  rangos <- rank(probabilidad, ties.method = "average")
+  (sum(rangos[casos]) - n_casos * (n_casos + 1) / 2) /
+    (n_casos * n_controles)
+}
+
+evaluar_modelo <- function(modelo, datos, muestra) {
+  probabilidad <- predict(modelo, newdata = datos, type = "response")
+  predictor_lineal <- predict(modelo, newdata = datos, type = "link")
+
+  modelo_intercepto <- glm(
+    mortalidad_30d ~ 1,
+    offset = predictor_lineal,
+    data = datos,
+    family = binomial(link = "logit")
+  )
+  modelo_pendiente <- glm(
+    mortalidad_30d ~ predictor_lineal,
+    data = datos,
+    family = binomial(link = "logit")
+  )
+
+  data.frame(
+    muestra = muestra,
+    n = nrow(datos),
+    muertes_30d = sum(datos$mortalidad_30d),
+    auc = calcular_auc(datos$mortalidad_30d, probabilidad),
+    brier = mean((datos$mortalidad_30d - probabilidad)^2),
+    intercepto_calibracion = coef(modelo_intercepto)[1],
+    pendiente_calibracion = coef(modelo_pendiente)[2],
+    row.names = NULL
+  )
+}
+
+tabla_rendimiento_modelo <- rbind(
+  evaluar_modelo(
+    modelo_regresion_logistica,
+    datos_derivacion,
+    "Derivación 2015-2017"
+  ),
+  evaluar_modelo(
+    modelo_regresion_logistica,
+    datos_validacion,
+    "Validación 2018-2019"
+  )
+)
+
+tabla_rendimiento_modelo[, c(
+  "auc", "brier", "intercepto_calibracion", "pendiente_calibracion"
+)] <- round(
+  tabla_rendimiento_modelo[, c(
+    "auc", "brier", "intercepto_calibracion", "pendiente_calibracion"
+  )],
+  3
 )
 
 coeficientes_regresion <- summary(
   modelo_regresion_logistica
 )$coefficients
 
-crear_fila_modelo <- function(termino, etiqueta) {
-  beta <- coeficientes_regresion[termino, "Estimate"]
-  error_estandar <- coeficientes_regresion[termino, "Std. Error"]
-
-  data.frame(
-    Variable = etiqueta,
-    `β-coefficients` = sprintf("%.3f", beta),
-    `OR (95% CI)` = sprintf(
-      "%.2f (%.2f-%.2f)",
-      exp(beta),
-      exp(beta - 1.96 * error_estandar),
-      exp(beta + 1.96 * error_estandar)
-    ),
-    Points = as.character(round(2 * beta)),
-    check.names = FALSE
-  )
-}
-
-crear_fila_texto <- function(
-  variable,
-  beta = "",
-  odds_ratio = "",
-  puntos = ""
-) {
-  data.frame(
-    Variable = variable,
-    `β-coefficients` = beta,
-    `OR (95% CI)` = odds_ratio,
-    Points = puntos,
-    check.names = FALSE
-  )
-}
-
-tabla_regresion_logistica <- rbind(
-  crear_fila_texto("Age groups"),
-  crear_fila_texto("< 50", "Reference", "", "0"),
-  crear_fila_modelo("edad_categoria50-65", "50-65"),
-  crear_fila_modelo("edad_categoria66-75", "66-75"),
-  crear_fila_modelo("edad_categoria>75", "> 75"),
-  crear_fila_modelo("precoag", "PRECOAG"),
-  crear_fila_modelo(
-    "iot_prehospitalaria",
-    "Pre-hospital intubation"
-  ),
-  crear_fila_modelo(
-    "mecanismo_alto_riesgo",
-    "High-risk mechanism"
-  ),
-  crear_fila_texto("PUPILS"),
-  crear_fila_texto("Normal", "Reference", "", "0"),
-  crear_fila_modelo(
-    "pupilasmidriasis unilateral",
-    "Unilateral mydriasis"
-  ),
-  crear_fila_modelo(
-    "pupilasmidriasis bilateral",
-    "Bilateral mydriasis"
-  ),
-  crear_fila_modelo("gcs_menor_igual_8", "GCS <= 8"),
-  crear_fila_modelo("mais_cabeza", "MAIS-Head"),
-  crear_fila_modelo("mais_torax", "MAIS-Thorax"),
-  crear_fila_modelo(
-    "fallo_hemodinamico",
-    "Haemodynamic failure"
-  ),
-  crear_fila_modelo(
-    "fallo_respiratorio",
-    "Respiratory failure"
-  ),
-  crear_fila_modelo("coagulopatia_24h", "Coagulopathy"),
-  crear_fila_modelo(
-    "ventilacion_mecanica",
-    "Mechanical ventilation"
-  ),
-  crear_fila_modelo("hemorragia_masiva", "Massive haemorrhage")
+# Tabla dinámica: solo los términos realmente incluidos en el modelo.
+# IC de Wald convencionales; no incorporan incertidumbre de selección LASSO.
+tabla_regresion_logistica <- data.frame(
+  Variable = rownames(coeficientes_regresion),
+  beta = coeficientes_regresion[, "Estimate"],
+  OR = exp(coeficientes_regresion[, "Estimate"]),
+  IC95_inferior = exp(coeficientes_regresion[, "Estimate"] -
+    1.96 * coeficientes_regresion[, "Std. Error"]),
+  IC95_superior = exp(coeficientes_regresion[, "Estimate"] +
+    1.96 * coeficientes_regresion[, "Std. Error"]),
+  row.names = NULL
 )
 
 resumen_muestras_regresion <- data.frame(
@@ -1027,95 +1000,10 @@ resumen_muestras_regresion <- data.frame(
 
 resumen_muestras_regresion
 tabla_regresion_logistica
+tabla_rendimiento_modelo
 ```
 
-```{r}
-#str(df, list.len = ncol(df))
-```
-## Tables to study missing data
 
-```{r}
-table(df$evolucion_hospitalaria, df$destino_alta_hospitalaria)
-table(df$evolucion_uci, df$destino_alta_uci)
-
-```
-```{r}
-
-#Remove patients with no age
-dim(df)
-
-df <- df[!is.na(df$edad), ]
-df <- df[!is.na(df$sdmo), ]
-
-dim(df)
-
-```
-
-```{r}
-table(df$evolucion_hospitalaria, df$destino_alta_hospitalaria)
-table(df$evolucion_uci, df$destino_alta_uci)
-```
-
-```{r}
-resumen_ausentes <- do.call(
-  rbind,
-  lapply(names(df), function(variable) {
-
-    # Convertir temporalmente a texto sin modificar df_original
-    x <- trimws(as.character(df[[variable]]))
-
-    n_total <- length(x)
-
-    # Las celdas vacías de Excel suelen importarse como NA.
-    # También incluye cadenas vacías "" o valores con solo espacios.
-    es_vacio <- is.na(x) | (!is.na(x) & x == "")
-
-    # Texto literal "NAS", sin distinguir mayúsculas/minúsculas
-    es_nas <- !is.na(x) & toupper(x) == "NAS"
-
-    # Valores que no están vacíos y no son "NAS"
-    es_valido <- !es_vacio & !es_nas
-
-    data.frame(
-      variable = variable,
-
-      n_vacios = sum(es_vacio),
-      pct_vacios = round(
-        100 * sum(es_vacio) / n_total,
-        2
-      ),
-
-      n_nas = sum(es_nas),
-      pct_nas = round(
-        100 * sum(es_nas) / n_total,
-        2
-      ),
-
-      n_vacios_nas = sum(es_vacio | es_nas),
-      pct_vacios_nas = round(
-        100 * sum(es_vacio | es_nas) / n_total,
-        2
-      ),
-
-      stringsAsFactors = FALSE
-    )
-  })
-)
-
-# Quitar nombres de fila
-rownames(resumen_ausentes) <- NULL
-
-# Ordenar de mayor a menor porcentaje de vacíos + NAS
-resumen_ausentes <- resumen_ausentes[
-  order(
-    -resumen_ausentes$pct_vacios_nas,
-    resumen_ausentes$variable
-  ),
-]
-
-# Abrir la tabla completa en RStudio
-#View(resumen_ausentes)
-```
 
 
 
