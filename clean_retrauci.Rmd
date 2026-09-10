@@ -808,7 +808,11 @@ semilla 20260903, estandarización de predictores y selección de lambda.1se
 según deviance binomial. También se informa lambda.min, sin elegir entre
 ambas usando la validación 2018-2019. El texto principal del artículo no
 especifica esos ajustes. Si LASSO retiene alguna categoría de edad o pupilas,
-se conserva la variable categórica completa en la regresión posterior.
+se aplica el principio jerárquico y se conserva la variable categórica completa
+en la regresión posterior. Por tanto, un coeficiente cero en un nivel concreto
+no implica que ese nivel se elimine del modelo final cuando otro nivel de la
+misma variable ha sido seleccionado. Las categorías de referencia se muestran
+explícitamente en las tablas, aunque no tengan un coeficiente propio.
 No se fuerza la selección de las 13 variables publicadas.
 
 Se mantienen las codificaciones actuales: MAIS desde mais1-mais6, vacíos
@@ -858,13 +862,58 @@ tabla_seleccion_lasso <- data.frame(
   variable = terminos_candidatos[indices_terminos],
   termino = colnames(x_lasso),
   beta_lasso = as.numeric(beta_lasso),
-  seleccionado = as.numeric(beta_lasso) != 0,
+  coeficiente_no_cero_lasso = as.numeric(beta_lasso) != 0,
   beta_lambda_min = as.numeric(beta_lasso_min),
+  es_referencia = FALSE,
+  orden = seq_along(beta_lasso) * 2,
   row.names = NULL
 )
 predictores_regresion <- unique(
-  tabla_seleccion_lasso$variable[tabla_seleccion_lasso$seleccionado]
+  tabla_seleccion_lasso$variable[
+    tabla_seleccion_lasso$coeficiente_no_cero_lasso
+  ]
 )
+
+# La decisión final se toma a nivel de variable, no de categoría aislada.
+tabla_seleccion_lasso$variable_seleccionada <-
+  tabla_seleccion_lasso$variable %in% predictores_regresion
+tabla_seleccion_lasso$incluido_modelo_final <-
+  tabla_seleccion_lasso$variable_seleccionada
+
+# model.matrix omite las referencias. Se añaden solo para documentar que
+# forman parte del factor; beta_lasso no es aplicable a estas filas.
+variables_con_referencia <- c("edad_categoria", "pupilas")
+terminos_referencia <- c("edad_categoria<50", "pupilasnormal")
+orden_referencia <- vapply(
+  variables_con_referencia,
+  function(v) min(tabla_seleccion_lasso$orden[
+    tabla_seleccion_lasso$variable == v
+  ]) - 1,
+  numeric(1)
+)
+filas_referencia_lasso <- data.frame(
+  variable = variables_con_referencia,
+  termino = terminos_referencia,
+  beta_lasso = NA_real_,
+  coeficiente_no_cero_lasso = NA,
+  beta_lambda_min = NA_real_,
+  es_referencia = TRUE,
+  orden = orden_referencia,
+  variable_seleccionada = variables_con_referencia %in%
+    predictores_regresion,
+  incluido_modelo_final = variables_con_referencia %in%
+    predictores_regresion,
+  row.names = NULL
+)
+tabla_seleccion_lasso <- rbind(
+  tabla_seleccion_lasso,
+  filas_referencia_lasso
+)
+tabla_seleccion_lasso <- tabla_seleccion_lasso[
+  order(tabla_seleccion_lasso$orden),
+  setdiff(names(tabla_seleccion_lasso), "orden")
+]
+rownames(tabla_seleccion_lasso) <- NULL
 resumen_lasso <- data.frame(
   n_derivacion = nrow(datos_derivacion),
   candidatas = length(candidatas_paper),
@@ -890,6 +939,29 @@ formula_regresion <- if (length(predictores_regresion)) {
 } else {
   mortalidad_30d ~ 1
 }
+
+formula_regresion <- mortalidad_30d ~
+  edad_categoria +
+  precoag +
+  iot_prehospitalaria +
+  mecanismo_alto_riesgo +
+  pupilas +
+  gcs_menor_igual_8 +
+  mais_cabeza +
+  mais_torax +
+  fallo_hemodinamico +
+  fallo_respiratorio +
+  coagulopatia_24h +
+  ventilacion_mecanica +
+  hemorragia_masiva
+
+# Mantiene las tablas posteriores sincronizadas con cualquier cambio manual
+# realizado en formula_regresion.
+predictores_modelo_final <- attr(
+  terms(formula_regresion),
+  "term.labels"
+)
+
 modelo_regresion_logistica <- glm(
   formula_regresion,
   data = datos_derivacion,
@@ -974,13 +1046,62 @@ coeficientes_regresion <- summary(
 tabla_regresion_logistica <- data.frame(
   Variable = rownames(coeficientes_regresion),
   beta = coeficientes_regresion[, "Estimate"],
+  Puntos = ifelse(
+    rownames(coeficientes_regresion) == "(Intercept)",
+    NA_integer_,
+    as.integer(round(2 * coeficientes_regresion[, "Estimate"]))
+  ),
   OR = exp(coeficientes_regresion[, "Estimate"]),
   IC95_inferior = exp(coeficientes_regresion[, "Estimate"] -
     1.96 * coeficientes_regresion[, "Std. Error"]),
   IC95_superior = exp(coeficientes_regresion[, "Estimate"] +
     1.96 * coeficientes_regresion[, "Std. Error"]),
+  orden = seq_len(nrow(coeficientes_regresion)) * 2,
   row.names = NULL
 )
+
+# Las categorías de referencia pertenecen al modelo, pero R las representa
+# mediante beta = 0, OR = 1 y 0 puntos, sin estimar un IC independiente.
+referencias_modelo <- data.frame(
+  variable_padre = c("edad_categoria", "pupilas"),
+  Variable = c("edad_categoria<50", "pupilasnormal"),
+  stringsAsFactors = FALSE
+)
+referencias_modelo <- referencias_modelo[
+  referencias_modelo$variable_padre %in% predictores_modelo_final,
+  , drop = FALSE
+]
+filas_referencia_regresion <- do.call(rbind, lapply(
+  seq_len(nrow(referencias_modelo)),
+  function(i) {
+    variable_padre <- referencias_modelo$variable_padre[i]
+    posiciones <- grep(
+      paste0("^", variable_padre),
+      tabla_regresion_logistica$Variable
+    )
+    data.frame(
+      Variable = referencias_modelo$Variable[i],
+      beta = 0,
+      Puntos = 0L,
+      OR = 1,
+      IC95_inferior = NA_real_,
+      IC95_superior = NA_real_,
+      orden = min(tabla_regresion_logistica$orden[posiciones]) - 1,
+      row.names = NULL
+    )
+  }
+))
+if (nrow(referencias_modelo) > 0) {
+  tabla_regresion_logistica <- rbind(
+    tabla_regresion_logistica,
+    filas_referencia_regresion
+  )
+}
+tabla_regresion_logistica <- tabla_regresion_logistica[
+  order(tabla_regresion_logistica$orden),
+  setdiff(names(tabla_regresion_logistica), "orden")
+]
+rownames(tabla_regresion_logistica) <- NULL
 
 resumen_muestras_regresion <- data.frame(
   muestra = c("Derivación 2015-2017", "Validación 2018-2019"),
