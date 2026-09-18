@@ -1,0 +1,553 @@
+---
+title: "RETRASCORE: derivacion y validacion temporal desde 2020"
+output:
+  html_document:
+    toc: true
+    toc_depth: 3
+    number_sections: true
+date: "2026-09-15"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+
+# Evita que Windows altere la letra enye al leer objetos RDS UTF-8.
+try(Sys.setlocale("LC_CTYPE", "English_United States.utf8"), silent = TRUE)
+
+library(dplyr)
+
+archivo_cohorte <- "cohorte_retrascore.rds"
+if (!file.exists(archivo_cohorte)) {
+  stop(
+    "No se encontro cohorte_retrascore.rds. ",
+    "Ejecute antes retrascore_validation_preprocessing.Rmd."
+  )
+}
+if (!requireNamespace("pROC", quietly = TRUE)) {
+  stop("Se necesita el paquete pROC para calcular el IC95% del AUROC.")
+}
+
+cohorte_retrascore <- readRDS(archivo_cohorte)
+```
+
+# Diseno del analisis
+
+Se repite el procedimiento de desarrollo y validacion temporal en los pacientes
+registrados desde 2020. Se define a priori el periodo 2020--2022 para derivacion
+y 2023 hasta el ultimo ano valido disponible para validacion. El ano valido no
+puede ser posterior al ano de ejecucion; de esta forma, registros con fechas
+imposibles se identifican y se excluyen de forma explicita.
+
+Se conserva el preprocesamiento previo, el desenlace de mortalidad a 30 dias y
+el analisis de casos completos sin imputacion. La descripcion incluye las 20
+variables candidatas de las tablas del articulo. El modelo principal se fija *a
+priori* a las 13 variables que integran el RETRASCORE publicado; no se realiza
+una nueva seleccion de variables con los datos de 2020 en adelante. La muestra
+de validacion no interviene en el ajuste del modelo.
+
+```{r parametros-cohorte}
+anio_inicio <- 2020L
+anio_fin_derivacion <- 2022L
+anio_inicio_validacion <- 2023L
+anio_ejecucion <- as.integer(format(Sys.Date(), "%Y"))
+
+candidatas_articulo <- c(
+  "edad_categoria", "genero_masculino", "precoag",
+  "atencion_prehospitalaria_medica", "iot_prehospitalaria",
+  "trauma_penetrante", "mecanismo_alto_riesgo", "pupilas",
+  "gcs_menor_igual_8", "mais_cabeza", "mais_torax", "mais_abdomen",
+  "mais_ext_superior", "mais_ext_inferior", "mais_externo",
+  "fallo_hemodinamico", "fallo_respiratorio", "coagulopatia_24h",
+  "ventilacion_mecanica", "hemorragia_masiva"
+)
+
+predictores_retrascore <- c(
+  "edad_categoria", "precoag", "iot_prehospitalaria",
+  "mecanismo_alto_riesgo", "pupilas", "gcs_menor_igual_8",
+  "mais_cabeza", "mais_torax", "fallo_hemodinamico",
+  "fallo_respiratorio", "coagulopatia_24h",
+  "ventilacion_mecanica", "hemorragia_masiva"
+)
+
+variables_regresion <- c(
+  "mortalidad_30d", "año_trauma", predictores_retrascore
+)
+stopifnot(
+  length(candidatas_articulo) == 20,
+  length(predictores_retrascore) == 13,
+  all(predictores_retrascore %in% candidatas_articulo)
+)
+
+anios_imposibles <- sort(unique(
+  cohorte_retrascore$año_trauma[
+    !is.na(cohorte_retrascore$año_trauma) &
+      cohorte_retrascore$año_trauma > anio_ejecucion
+  ]
+))
+
+cohorte_desde_2020 <- cohorte_retrascore %>%
+  filter(
+    año_trauma >= anio_inicio,
+    año_trauma <= anio_ejecucion
+  )
+
+anio_fin_estudio <- max(cohorte_desde_2020$año_trauma, na.rm = TRUE)
+if (anio_fin_estudio < anio_inicio_validacion) {
+  stop("No hay anos suficientes para formar la muestra de validacion temporal.")
+}
+
+casos_completos <- complete.cases(
+  cohorte_desde_2020[, variables_regresion, drop = FALSE]
+)
+cohorte_analitica <- cohorte_desde_2020[casos_completos, , drop = FALSE]
+
+datos_derivacion <- cohorte_analitica %>%
+  filter(año_trauma >= anio_inicio, año_trauma <= anio_fin_derivacion)
+datos_validacion <- cohorte_analitica %>%
+  filter(año_trauma >= anio_inicio_validacion, año_trauma <= anio_fin_estudio)
+
+stopifnot(nrow(datos_derivacion) > 0, nrow(datos_validacion) > 0)
+stopifnot(
+  length(unique(datos_derivacion$mortalidad_30d)) == 2,
+  length(unique(datos_validacion$mortalidad_30d)) == 2
+)
+
+periodos <- list(
+  Derivacion = anio_inicio:anio_fin_derivacion,
+  Validacion = anio_inicio_validacion:anio_fin_estudio
+)
+
+flujo_cohorte <- do.call(rbind, lapply(names(periodos), function(nombre) {
+  anios <- periodos[[nombre]]
+  d <- cohorte_desde_2020[cohorte_desde_2020$año_trauma %in% anios, ]
+  completo <- complete.cases(d[, variables_regresion, drop = FALSE])
+  data.frame(
+    muestra = nombre,
+    periodo = paste(range(anios), collapse = "-"),
+    elegibles = nrow(d),
+    outcome_30d_ausente = sum(is.na(d$mortalidad_30d)),
+    excluidos_por_cualquier_ausente = sum(!completo),
+    casos_completos = sum(completo),
+    muertes_30d = sum(d$mortalidad_30d[completo] == 1)
+  )
+}))
+rownames(flujo_cohorte) <- NULL
+
+auditoria_fechas <- data.frame(
+  criterio = c(
+    "Inicio del estudio",
+    "Fin de derivacion",
+    "Inicio de validacion",
+    "Ultimo ano valido disponible",
+    "Anos futuros/imposibles excluidos"
+  ),
+  valor = c(
+    anio_inicio,
+    anio_fin_derivacion,
+    anio_inicio_validacion,
+    anio_fin_estudio,
+    if (length(anios_imposibles)) paste(anios_imposibles, collapse = ", ") else "Ninguno"
+  )
+)
+
+knitr::kable(auditoria_fechas, caption = "Definicion temporal y auditoria")
+knitr::kable(flujo_cohorte, caption = "Flujo de la cohorte analitica")
+```
+
+# Caracteristicas de las cohortes
+
+Las variables continuas se presentan como mediana (RIC) y las binarias o
+categoricas como n (%). Para las siete variables descriptivas que no forman
+parte del modelo, el porcentaje usa como denominador los valores disponibles de
+cada muestra.
+
+```{r tabla-descriptiva}
+grupos <- list(
+  Total = cohorte_analitica,
+  Derivacion = datos_derivacion,
+  Validacion = datos_validacion
+)
+
+resumir_continua <- function(x) {
+  q <- quantile(x, c(0.25, 0.5, 0.75), na.rm = TRUE, names = FALSE)
+  sprintf("%g (%g-%g)", q[2], q[1], q[3])
+}
+
+resumir_continua_pct <- function(x) {
+  q <- 100 * quantile(x, c(0.25, 0.5, 0.75), na.rm = TRUE, names = FALSE)
+  sprintf("%.1f (%.1f-%.1f)", q[2], q[1], q[3])
+}
+
+resumir_categoria <- function(x, nivel) {
+  n <- sum(x == nivel, na.rm = TRUE)
+  sprintf("%d (%.1f%%)", n, 100 * n / sum(!is.na(x)))
+}
+
+fila_continua <- function(variable, etiqueta) {
+  c(Variable = etiqueta, vapply(grupos, function(d) {
+    resumir_continua(d[[variable]])
+  }, character(1)))
+}
+
+fila_continua_porcentaje <- function(variable, etiqueta) {
+  c(Variable = etiqueta, vapply(grupos, function(d) {
+    resumir_continua_pct(d[[variable]])
+  }, character(1)))
+}
+
+fila_categoria <- function(variable, nivel, etiqueta) {
+  c(Variable = etiqueta, vapply(grupos, function(d) {
+    resumir_categoria(d[[variable]], nivel)
+  }, character(1)))
+}
+
+filas_descriptivas <- rbind(
+  fila_continua("edad", "Edad, anos"),
+  fila_categoria("edad_categoria", "<50", "Edad <50"),
+  fila_categoria("edad_categoria", "50-65", "Edad 50-65"),
+  fila_categoria("edad_categoria", "66-75", "Edad 66-75"),
+  fila_categoria("edad_categoria", ">75", "Edad >75"),
+  fila_categoria("genero_masculino", 1, "Sexo masculino"),
+  fila_categoria("precoag", 1, "PRECOAG"),
+  fila_categoria("atencion_prehospitalaria_medica", 1, "Atencion prehospitalaria"),
+  fila_categoria("iot_prehospitalaria", 1, "Intubacion prehospitalaria"),
+  fila_categoria("trauma_penetrante", 1, "Trauma penetrante"),
+  fila_categoria("mecanismo_alto_riesgo", 1, "Mecanismo de alto riesgo"),
+  fila_categoria("pupilas", "normal", "Pupilas normales"),
+  fila_categoria("pupilas", "midriasis unilateral", "Midriasis unilateral"),
+  fila_categoria("pupilas", "midriasis bilateral", "Midriasis bilateral"),
+  fila_categoria("gcs_menor_igual_8", 1, "GCS <=8"),
+  fila_categoria("mais_cabeza", 1, "MAIS cabeza"),
+  fila_categoria("mais_torax", 1, "MAIS torax"),
+  fila_categoria("mais_abdomen", 1, "MAIS abdomen"),
+  fila_categoria("mais_ext_superior", 1, "MAIS extremidad superior"),
+  fila_categoria("mais_ext_inferior", 1, "MAIS extremidad inferior"),
+  fila_categoria("mais_externo", 1, "MAIS externo"),
+  fila_categoria("fallo_hemodinamico", 1, "Fallo hemodinamico"),
+  fila_categoria("fallo_respiratorio", 1, "Fallo respiratorio"),
+  fila_categoria("coagulopatia_24h", 1, "Coagulopatia 24 h"),
+  fila_categoria("ventilacion_mecanica", 1, "Ventilacion mecanica"),
+  fila_categoria("hemorragia_masiva", 1, "Hemorragia masiva"),
+  fila_continua_porcentaje(
+    "probabilidad_muerte_triss", "TRISS, probabilidad de muerte (%)"
+  ),
+  fila_continua("dias_estancia_uci", "Estancia en UCI, dias"),
+  fila_categoria("mortalidad_30d", 1, "Mortalidad a 30 dias")
+)
+
+tabla_descriptiva <- as.data.frame(filas_descriptivas, check.names = FALSE)
+names(tabla_descriptiva) <- c(
+  "Variable",
+  paste0("Total (N=", nrow(cohorte_analitica), ")"),
+  paste0("Derivacion (N=", nrow(datos_derivacion), ")"),
+  paste0("Validacion (N=", nrow(datos_validacion), ")")
+)
+knitr::kable(tabla_descriptiva, caption = "Caracteristicas de las cohortes")
+```
+
+# Modelo con las variables publicadas
+
+El modelo principal contiene exactamente las 13 variables del RETRASCORE
+publicado: edad, PRECOAG, intubacion prehospitalaria, mecanismo de alto riesgo,
+pupilas, GCS menor o igual a 8, MAIS de cabeza, MAIS de torax, fallo
+hemodinamico, fallo respiratorio, coagulopatia, ventilacion mecanica y
+hemorragia masiva. Sus coeficientes se reestiman exclusivamente en 2020--2022 y
+se aplican sin reajuste a 2023--2025.
+
+```{r modelo-y-validacion}
+formula_modelo <- reformulate(
+  predictores_retrascore,
+  response = "mortalidad_30d"
+)
+
+modelo_reestimado <- glm(
+  formula_modelo,
+  data = datos_derivacion,
+  family = binomial(link = "logit")
+)
+
+stopifnot(modelo_reestimado$converged)
+if (anyNA(coef(modelo_reestimado))) {
+  stop("Hay coeficientes no estimables; revise colinealidad o niveles vacios.")
+}
+
+evaluar_probabilidades <- function(outcome, probabilidad, muestra, modelo) {
+  valido <- !is.na(outcome) & !is.na(probabilidad)
+  outcome <- outcome[valido]
+  probabilidad <- probabilidad[valido]
+  predictor_lineal <- qlogis(pmin(pmax(probabilidad, 1e-12), 1 - 1e-12))
+
+  roc_obj <- pROC::roc(
+    response = outcome,
+    predictor = probabilidad,
+    levels = c(0, 1),
+    direction = "<",
+    quiet = TRUE
+  )
+  ic_auc <- as.numeric(pROC::ci.auc(roc_obj, method = "delong"))
+
+  modelo_intercepto <- glm(
+    outcome ~ 1,
+    offset = predictor_lineal,
+    family = binomial(link = "logit")
+  )
+  modelo_pendiente <- glm(
+    outcome ~ predictor_lineal,
+    family = binomial(link = "logit")
+  )
+
+  data.frame(
+    modelo = modelo,
+    muestra = muestra,
+    n = length(outcome),
+    muertes_30d = sum(outcome),
+    mortalidad_pct = 100 * mean(outcome),
+    auc = as.numeric(pROC::auc(roc_obj)),
+    auc_ic95_inferior = ic_auc[1],
+    auc_ic95_superior = ic_auc[3],
+    brier = mean((outcome - probabilidad)^2),
+    intercepto_calibracion = unname(coef(modelo_intercepto)[1]),
+    pendiente_calibracion = unname(coef(modelo_pendiente)[2]),
+    row.names = NULL
+  )
+}
+
+formatear_rendimiento <- function(x) {
+  data.frame(
+    Modelo = x$modelo,
+    Periodo = x$muestra,
+    N = x$n,
+    `AUROC (IC95%)` = sprintf(
+      "%.3f (%.3f-%.3f)",
+      x$auc, x$auc_ic95_inferior, x$auc_ic95_superior
+    ),
+    Brier = sprintf("%.3f", x$brier),
+    `Intercepto calibracion` = sprintf("%.3f", x$intercepto_calibracion),
+    `Pendiente calibracion` = sprintf("%.3f", x$pendiente_calibracion),
+    check.names = FALSE
+  )
+}
+
+prob_reestimada_derivacion <- predict(
+  modelo_reestimado, newdata = datos_derivacion, type = "response"
+)
+prob_reestimada_validacion <- predict(
+  modelo_reestimado, newdata = datos_validacion, type = "response"
+)
+
+tabla_rendimiento_reestimado <- rbind(
+  evaluar_probabilidades(
+    datos_derivacion$mortalidad_30d,
+    prob_reestimada_derivacion,
+    paste0(anio_inicio, "-", anio_fin_derivacion),
+    "13 variables, coeficientes reestimados"
+  ),
+  evaluar_probabilidades(
+    datos_validacion$mortalidad_30d,
+    prob_reestimada_validacion,
+    paste0(anio_inicio_validacion, "-", anio_fin_estudio),
+    "13 variables, coeficientes reestimados"
+  )
+)
+
+coeficientes <- summary(modelo_reestimado)$coefficients
+tabla_coeficientes <- data.frame(
+  termino = rownames(coeficientes),
+  beta = coeficientes[, "Estimate"],
+  error_estandar = coeficientes[, "Std. Error"],
+  p = coeficientes[, "Pr(>|z|)"],
+  OR = exp(coeficientes[, "Estimate"]),
+  IC95_inferior = exp(
+    coeficientes[, "Estimate"] - 1.96 * coeficientes[, "Std. Error"]
+  ),
+  IC95_superior = exp(
+    coeficientes[, "Estimate"] + 1.96 * coeficientes[, "Std. Error"]
+  ),
+  row.names = NULL
+)
+
+formula_modelo
+knitr::kable(
+  data.frame(variable = predictores_retrascore),
+  caption = "Variables del RETRASCORE incluidas a priori"
+)
+knitr::kable(
+  tabla_coeficientes,
+  digits = 4,
+  caption = "Regresion logistica ajustada en 2020-2022"
+)
+knitr::kable(
+  formatear_rendimiento(tabla_rendimiento_reestimado),
+  caption = "Rendimiento del modelo con coeficientes reestimados"
+)
+```
+
+# Validacion del modelo original del articulo
+
+Ademas del modelo reestimado, se aplica directamente la ecuacion publicada, sin
+modificar ningun coeficiente. Esta es la validacion temporal estricta del
+RETRASCORE original en los pacientes registrados desde 2020.
+
+```{r validacion-ecuacion-publicada}
+calcular_probabilidad_publicada <- function(datos) {
+  eta <- -5.432 +
+    0.598 * (datos$edad_categoria == "50-65") +
+    1.239 * (datos$edad_categoria == "66-75") +
+    2.198 * (datos$edad_categoria == ">75") +
+    0.349 * datos$precoag +
+    0.336 * datos$iot_prehospitalaria +
+    0.662 * datos$mecanismo_alto_riesgo +
+    0.950 * (datos$pupilas == "midriasis unilateral") +
+    3.217 * (datos$pupilas == "midriasis bilateral") +
+    0.841 * datos$gcs_menor_igual_8 +
+    0.495 * datos$mais_cabeza -
+    0.271 * datos$mais_torax +
+    1.148 * datos$fallo_hemodinamico +
+    0.708 * datos$fallo_respiratorio +
+    0.567 * datos$coagulopatia_24h +
+    0.580 * datos$ventilacion_mecanica +
+    0.452 * datos$hemorragia_masiva
+  plogis(eta)
+}
+
+prob_publicada_derivacion <- calcular_probabilidad_publicada(datos_derivacion)
+prob_publicada_validacion <- calcular_probabilidad_publicada(datos_validacion)
+
+tabla_rendimiento_publicado <- rbind(
+  evaluar_probabilidades(
+    datos_derivacion$mortalidad_30d,
+    prob_publicada_derivacion,
+    paste0(anio_inicio, "-", anio_fin_derivacion),
+    "RETRASCORE original"
+  ),
+  evaluar_probabilidades(
+    datos_validacion$mortalidad_30d,
+    prob_publicada_validacion,
+    paste0(anio_inicio_validacion, "-", anio_fin_estudio),
+    "RETRASCORE original"
+  )
+)
+
+knitr::kable(
+  formatear_rendimiento(tabla_rendimiento_publicado),
+  caption = "Validacion temporal de la ecuacion RETRASCORE publicada"
+)
+```
+
+# Comparacion con TRISS
+
+Como en el articulo, se presenta TRISS como modelo comparador. La comparacion
+usa los casos con probabilidad TRISS disponible dentro de cada muestra.
+
+```{r comparacion-triss}
+evaluar_triss <- function(datos, muestra) {
+  evaluar_probabilidades(
+    datos$mortalidad_30d,
+    datos$probabilidad_muerte_triss,
+    muestra,
+    "TRISS"
+  )
+}
+
+tabla_rendimiento_triss <- rbind(
+  evaluar_triss(
+    datos_derivacion,
+    paste0(anio_inicio, "-", anio_fin_derivacion)
+  ),
+  evaluar_triss(
+    datos_validacion,
+    paste0(anio_inicio_validacion, "-", anio_fin_estudio)
+  )
+)
+
+tabla_comparacion <- rbind(
+  tabla_rendimiento_reestimado,
+  tabla_rendimiento_publicado,
+  tabla_rendimiento_triss
+)
+
+knitr::kable(
+  formatear_rendimiento(tabla_comparacion),
+  caption = "Comparacion del rendimiento de los modelos"
+)
+```
+
+# Resultados principales
+
+La cohorte de derivacion incluyo `r nrow(datos_derivacion)` pacientes y
+`r sum(datos_derivacion$mortalidad_30d)` muertes a 30 dias
+(`r sprintf("%.1f", 100 * mean(datos_derivacion$mortalidad_30d))`%). La
+validacion incluyo `r nrow(datos_validacion)` pacientes y
+`r sum(datos_validacion$mortalidad_30d)` muertes
+(`r sprintf("%.1f", 100 * mean(datos_validacion$mortalidad_30d))`%).
+
+La ecuacion original obtuvo en validacion un AUROC de
+`r sprintf("%.3f", tabla_rendimiento_publicado$auc[2])` (IC95%
+`r sprintf("%.3f", tabla_rendimiento_publicado$auc_ic95_inferior[2])`--`r sprintf("%.3f", tabla_rendimiento_publicado$auc_ic95_superior[2])`) y un
+Brier de `r sprintf("%.3f", tabla_rendimiento_publicado$brier[2])`. El
+intercepto de calibracion positivo
+(`r sprintf("%.3f", tabla_rendimiento_publicado$intercepto_calibracion[2])`)
+indica que, en promedio, el modelo original infraestima la mortalidad en la
+cohorte 2023--2025. Aun asi, discrimina mejor que TRISS, cuyo AUROC en esa
+muestra fue `r sprintf("%.3f", tabla_rendimiento_triss$auc[2])`.
+
+# Calibracion por deciles
+
+```{r calibracion-deciles}
+resumir_calibracion <- function(outcome, probabilidad, muestra, modelo) {
+  data.frame(outcome = outcome, probabilidad = probabilidad) %>%
+    filter(!is.na(outcome), !is.na(probabilidad)) %>%
+    mutate(decil = ntile(probabilidad, 10)) %>%
+    group_by(decil) %>%
+    summarise(
+      n = n(),
+      predicha = mean(probabilidad),
+      observada = mean(outcome),
+      .groups = "drop"
+    ) %>%
+    mutate(muestra = muestra, modelo = modelo, .before = 1)
+}
+
+tabla_calibracion <- rbind(
+  resumir_calibracion(
+    datos_derivacion$mortalidad_30d,
+    prob_publicada_derivacion,
+    paste0(anio_inicio, "-", anio_fin_derivacion),
+    "RETRASCORE original"
+  ),
+  resumir_calibracion(
+    datos_validacion$mortalidad_30d,
+    prob_publicada_validacion,
+    paste0(anio_inicio_validacion, "-", anio_fin_estudio),
+    "RETRASCORE original"
+  )
+)
+
+knitr::kable(
+  tabla_calibracion,
+  digits = 3,
+  caption = "Mortalidad predicha y observada por deciles de riesgo"
+)
+```
+
+# Notas de interpretacion
+
+- El analisis principal usa las mismas 13 variables del modelo final del
+  articulo. Las otras siete candidatas se mantienen en la tabla descriptiva,
+  pero no se incorporan al modelo.
+- Los resultados se aplican a casos completos y pueden diferir de un analisis
+  con imputacion multiple.
+- La division temporal 2020--2022 / 2023--2025 se fijo antes del ajuste y
+  conserva tres anos en cada muestra.
+- El modelo reestimado permite estudiar los coeficientes en la cohorte reciente;
+  la ecuacion original, aplicada sin cambios, es la validacion del RETRASCORE
+  publicado.
+- No se ha repetido la seleccion LASSO, porque hacerlo podria producir un
+  conjunto distinto de variables y contradir el objetivo de usar las mismas
+  variables del articulo.
+
+# Fuente
+
+Servia L, et al. *Development of a new score for early mortality prediction in
+trauma ICU patients: RETRASCORE*. Critical Care. 2021;25:420.
+https://doi.org/10.1186/s13054-021-03845-6

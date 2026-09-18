@@ -1,0 +1,447 @@
+---
+title: "RETRASCORE: mortalidad y exactitud por puntuacion y ano"
+subtitle: "Reproduccion del punto 6 con cohorte_retrascore.rds"
+date: "`r format(Sys.Date(), '%Y-%m-%d')`"
+output:
+  html_document:
+    toc: true
+    toc_depth: 2
+    self_contained: true
+params:
+  probability_cutoff: 0.5
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo = TRUE,
+  warning = FALSE,
+  message = FALSE,
+  fig.width = 12,
+  fig.height = 7,
+  dpi = 120
+)
+
+# Evita que Windows altere la letra enye al leer objetos RDS UTF-8.
+try(Sys.setlocale("LC_CTYPE", "English_United States.utf8"), silent = TRUE)
+
+archivo_cohorte <- "cohorte_retrascore.rds"
+if (!file.exists(archivo_cohorte)) {
+  stop("No se encontro cohorte_retrascore.rds en el directorio de trabajo.")
+}
+
+cohorte <- readRDS(archivo_cohorte)
+n_pacientes_rds_original <- nrow(cohorte)
+directorio_salida <- "outputs_punto_6"
+dir.create(directorio_salida, showWarnings = FALSE, recursive = TRUE)
+
+# El RDS fue creado con un nombre UTF-8 que algunas configuraciones de Windows
+# representan de forma distinta. Se normaliza solo ese nombre a ASCII.
+nombres_ascii <- tolower(iconv(names(cohorte), from = "UTF-8", to = "ASCII//TRANSLIT"))
+columna_ano <- which(nombres_ascii == "ano_trauma")
+if (length(columna_ano) == 1L) {
+  names(cohorte)[columna_ano] <- "ano_trauma"
+}
+
+# Exclusion solicitada: registro con ano de trauma imposible (2925).
+n_excluidos_ano_2925 <- sum(cohorte$ano_trauma == 2925, na.rm = TRUE)
+cohorte <- cohorte[
+  is.na(cohorte$ano_trauma) | cohorte$ano_trauma != 2925,
+  ,
+  drop = FALSE
+]
+
+variables_necesarias <- c(
+  "ano_trauma", "mortalidad_30d", "edad_categoria", "precoag",
+  "iot_prehospitalaria", "mecanismo_alto_riesgo", "pupilas",
+  "gcs_menor_igual_8", "mais_cabeza", "mais_torax",
+  "fallo_hemodinamico", "fallo_respiratorio", "coagulopatia_24h",
+  "ventilacion_mecanica", "hemorragia_masiva"
+)
+
+variables_ausentes <- setdiff(variables_necesarias, names(cohorte))
+if (length(variables_ausentes)) {
+  stop(
+    "Faltan variables necesarias en el RDS: ",
+    paste(variables_ausentes, collapse = ", ")
+  )
+}
+
+comprobar_binaria <- function(x, nombre) {
+  valores <- unique(stats::na.omit(x))
+  if (!all(valores %in% c(0, 1))) {
+    stop("La variable '", nombre, "' contiene valores distintos de 0, 1 o NA.")
+  }
+  as.integer(x)
+}
+
+plot_metric_heatmap <- function(datos, variable, titulo, etiqueta_leyenda,
+                                variable_n = "pacientes_n") {
+  parametros_originales <- graphics::par(no.readonly = TRUE)
+  on.exit({
+    graphics::layout(1)
+    graphics::par(parametros_originales)
+  }, add = TRUE)
+
+  anos <- sort(unique(datos$ano))
+  puntuaciones <- if (is.factor(datos$retrascore)) {
+    levels(droplevels(datos$retrascore))
+  } else {
+    sort(unique(datos$retrascore))
+  }
+  matriz <- matrix(
+    NA_real_,
+    nrow = length(puntuaciones),
+    ncol = length(anos),
+    dimnames = list(puntuaciones, anos)
+  )
+  matriz_n <- matrix(
+    NA_integer_,
+    nrow = length(puntuaciones),
+    ncol = length(anos),
+    dimnames = list(puntuaciones, anos)
+  )
+
+  for (i in seq_len(nrow(datos))) {
+    fila <- match(as.character(datos$retrascore[i]), puntuaciones)
+    columna <- match(datos$ano[i], anos)
+    matriz[fila, columna] <- datos[[variable]][i]
+    matriz_n[fila, columna] <- datos[[variable_n]][i]
+  }
+
+  colores <- grDevices::colorRampPalette(
+    c("#08306B", "#2171B5", "#6BAED6", "#F7FBFF",
+      "#FEE391", "#EC7014", "#99000D")
+  )(101)
+
+  graphics::layout(matrix(c(1, 2), nrow = 1), widths = c(15, 1.4))
+  graphics::par(mar = c(5.5, 5.5, 4.5, 1), xpd = FALSE)
+  graphics::image(
+    x = seq_along(anos),
+    y = seq_along(puntuaciones),
+    z = t(matriz),
+    zlim = c(0, 100),
+    col = colores,
+    axes = FALSE,
+    xlab = paste0("A", intToUtf8(241), "o del trauma"),
+    ylab = "RETRASCORE (puntos)",
+    main = titulo,
+    useRaster = TRUE
+  )
+  graphics::axis(1, at = seq_along(anos), labels = anos, las = 2)
+  graphics::axis(2, at = seq_along(puntuaciones), labels = puntuaciones, las = 1)
+  graphics::abline(
+    v = seq(0.5, length(anos) + 0.5, by = 1),
+    h = seq(0.5, length(puntuaciones) + 0.5, by = 1),
+    col = grDevices::adjustcolor("white", alpha.f = 0.60),
+    lwd = 0.7
+  )
+  graphics::box()
+
+  celdas <- which(!is.na(matriz), arr.ind = TRUE)
+  if (nrow(celdas)) {
+    valores <- matriz[celdas]
+    color_texto <- ifelse(valores <= 20 | valores >= 80, "white", "#202020")
+    graphics::text(
+      x = celdas[, "col"],
+      y = celdas[, "row"],
+      labels = sprintf("n=%d", matriz_n[celdas]),
+      cex = 0.56,
+      col = color_texto
+    )
+  }
+
+  graphics::par(mar = c(5.5, 0.5, 4.5, 4.5))
+  escala <- seq(0, 100, length.out = 101)
+  graphics::image(
+    x = 1,
+    y = escala,
+    z = matrix(escala, nrow = 1),
+    zlim = c(0, 100),
+    col = colores,
+    axes = FALSE,
+    xlab = "",
+    ylab = "",
+    useRaster = TRUE
+  )
+  graphics::axis(4, at = seq(0, 100, 20), las = 1)
+  graphics::mtext(etiqueta_leyenda, side = 4, line = 2.6)
+  graphics::box()
+}
+```
+
+# 6. Mortalidad y exactitud de clasificacion por RETRASCORE y ano
+
+El analisis utiliza directamente `cohorte_retrascore.rds`. Como el archivo no
+incluye una columna de puntuacion RETRASCORE, esta se reconstruye a partir de
+sus componentes segun el articulo original: cada coeficiente publicado se
+multiplica por 2 y se redondea al entero mas cercano. La probabilidad de muerte
+se calcula con la ecuacion logistica publicada, sin reestimar coeficientes.
+
+La mortalidad se define como la proporcion de muertes a 30 dias entre los casos
+con desenlace conocido. La exactitud es la proporcion de pacientes cuya clase
+predicha coincide con el desenlace observado, usando probabilidad de muerte
+`>= params$probability_cutoff` para predecir muerte.
+
+```{r calcular-retrascore}
+edad <- as.character(cohorte$edad_categoria)
+pupilas <- as.character(cohorte$pupilas)
+
+componentes_puntos <- data.frame(
+  edad = ifelse(
+    is.na(edad), NA_integer_,
+    c("<50" = 0L, "50-65" = 1L, "66-75" = 2L, ">75" = 4L)[edad]
+  ),
+  precoag = comprobar_binaria(cohorte$precoag, "precoag"),
+  iot_prehospitalaria = comprobar_binaria(
+    cohorte$iot_prehospitalaria, "iot_prehospitalaria"
+  ),
+  mecanismo_alto_riesgo = comprobar_binaria(
+    cohorte$mecanismo_alto_riesgo, "mecanismo_alto_riesgo"
+  ),
+  pupilas = ifelse(
+    is.na(pupilas), NA_integer_,
+    c("normal" = 0L, "midriasis unilateral" = 2L,
+      "midriasis bilateral" = 6L)[pupilas]
+  ),
+  gcs_menor_igual_8 = 2L * comprobar_binaria(
+    cohorte$gcs_menor_igual_8, "gcs_menor_igual_8"
+  ),
+  mais_cabeza = comprobar_binaria(cohorte$mais_cabeza, "mais_cabeza"),
+  mais_torax = -comprobar_binaria(cohorte$mais_torax, "mais_torax"),
+  fallo_hemodinamico = 2L * comprobar_binaria(
+    cohorte$fallo_hemodinamico, "fallo_hemodinamico"
+  ),
+  fallo_respiratorio = comprobar_binaria(
+    cohorte$fallo_respiratorio, "fallo_respiratorio"
+  ),
+  coagulopatia_24h = comprobar_binaria(
+    cohorte$coagulopatia_24h, "coagulopatia_24h"
+  ),
+  ventilacion_mecanica = comprobar_binaria(
+    cohorte$ventilacion_mecanica, "ventilacion_mecanica"
+  ),
+  hemorragia_masiva = comprobar_binaria(
+    cohorte$hemorragia_masiva, "hemorragia_masiva"
+  )
+)
+
+componentes_modelo <- data.frame(
+  edad_50_65 = ifelse(is.na(edad), NA_integer_, edad == "50-65"),
+  edad_66_75 = ifelse(is.na(edad), NA_integer_, edad == "66-75"),
+  edad_mayor_75 = ifelse(is.na(edad), NA_integer_, edad == ">75"),
+  precoag = componentes_puntos$precoag,
+  iot_prehospitalaria = componentes_puntos$iot_prehospitalaria,
+  mecanismo_alto_riesgo = componentes_puntos$mecanismo_alto_riesgo,
+  midriasis_unilateral = ifelse(
+    is.na(pupilas), NA_integer_, pupilas == "midriasis unilateral"
+  ),
+  midriasis_bilateral = ifelse(
+    is.na(pupilas), NA_integer_, pupilas == "midriasis bilateral"
+  ),
+  gcs_menor_igual_8 = cohorte$gcs_menor_igual_8,
+  mais_cabeza = cohorte$mais_cabeza,
+  mais_torax = cohorte$mais_torax,
+  fallo_hemodinamico = cohorte$fallo_hemodinamico,
+  fallo_respiratorio = cohorte$fallo_respiratorio,
+  coagulopatia_24h = cohorte$coagulopatia_24h,
+  ventilacion_mecanica = cohorte$ventilacion_mecanica,
+  hemorragia_masiva = cohorte$hemorragia_masiva
+)
+
+casos_completos <- stats::complete.cases(componentes_modelo)
+retrascore <- rep(NA_integer_, nrow(cohorte))
+retrascore[casos_completos] <- rowSums(componentes_puntos[casos_completos, ])
+
+puntuaciones_menores_14 <- sort(unique(retrascore[!is.na(retrascore) & retrascore < 14]))
+niveles_retrascore <- c(as.character(puntuaciones_menores_14), "14+")
+retrascore_grupo <- factor(
+  ifelse(
+    is.na(retrascore),
+    NA_character_,
+    ifelse(retrascore >= 14, "14+", as.character(retrascore))
+  ),
+  levels = niveles_retrascore,
+  ordered = TRUE
+)
+
+predictor_lineal <- rep(NA_real_, nrow(cohorte))
+predictor_lineal[casos_completos] <- with(
+  componentes_modelo[casos_completos, ],
+  -5.432 +
+    0.598 * edad_50_65 + 1.239 * edad_66_75 + 2.198 * edad_mayor_75 +
+    0.349 * precoag + 0.336 * iot_prehospitalaria +
+    0.662 * mecanismo_alto_riesgo + 0.950 * midriasis_unilateral +
+    3.217 * midriasis_bilateral + 0.841 * gcs_menor_igual_8 +
+    0.495 * mais_cabeza - 0.271 * mais_torax +
+    1.148 * fallo_hemodinamico + 0.708 * fallo_respiratorio +
+    0.567 * coagulopatia_24h + 0.580 * ventilacion_mecanica +
+    0.452 * hemorragia_masiva
+)
+
+probabilidad_muerte <- stats::plogis(predictor_lineal)
+muerte_predicha <- ifelse(
+  is.na(probabilidad_muerte), NA_integer_,
+  as.integer(probabilidad_muerte >= params$probability_cutoff)
+)
+
+resultado_paciente <- data.frame(
+  fila_fuente = seq_len(nrow(cohorte)),
+  ano = cohorte$ano_trauma,
+  muerte_30d = cohorte$mortalidad_30d,
+  retrascore = retrascore,
+  retrascore_grupo = retrascore_grupo,
+  probabilidad_muerte = probabilidad_muerte,
+  muerte_predicha = muerte_predicha,
+  clasificacion_correcta = ifelse(
+    is.na(cohorte$mortalidad_30d) | is.na(muerte_predicha),
+    NA_integer_,
+    as.integer(cohorte$mortalidad_30d == muerte_predicha)
+  )
+)
+
+utils::write.csv(
+  resultado_paciente,
+  file.path(directorio_salida, "retrascore_resultado_por_paciente.csv"),
+  row.names = FALSE,
+  na = ""
+)
+```
+
+```{r resumen-por-puntuacion-y-ano}
+validos <- !is.na(resultado_paciente$retrascore_grupo) & !is.na(resultado_paciente$ano)
+partes <- split(
+  resultado_paciente[validos, , drop = FALSE],
+  interaction(
+    resultado_paciente$retrascore_grupo[validos],
+    resultado_paciente$ano[validos],
+    drop = TRUE
+  )
+)
+
+if (!length(partes)) {
+  stop("No hay registros con RETRASCORE y ano utilizables.")
+}
+
+filas_resumen <- lapply(partes, function(d) {
+  desenlace_conocido <- !is.na(d$muerte_30d)
+  exactitud_evaluable <- !is.na(d$clasificacion_correcta)
+  data.frame(
+    retrascore = d$retrascore_grupo[1],
+    ano = d$ano[1],
+    pacientes_n = nrow(d),
+    desenlace_conocido_n = sum(desenlace_conocido),
+    muertes_n = sum(d$muerte_30d == 1, na.rm = TRUE),
+    mortalidad_porcentaje = if (any(desenlace_conocido)) {
+      100 * mean(d$muerte_30d[desenlace_conocido] == 1)
+    } else {
+      NA_real_
+    },
+    exactitud_evaluable_n = sum(exactitud_evaluable),
+    clasificaciones_correctas_n = sum(
+      d$clasificacion_correcta == 1, na.rm = TRUE
+    ),
+    exactitud_porcentaje = if (any(exactitud_evaluable)) {
+      100 * mean(d$clasificacion_correcta[exactitud_evaluable] == 1)
+    } else {
+      NA_real_
+    }
+  )
+})
+
+resumen_puntuacion_ano <- do.call(rbind, filas_resumen)
+resumen_puntuacion_ano <- resumen_puntuacion_ano[
+  order(resumen_puntuacion_ano$ano, resumen_puntuacion_ano$retrascore),
+]
+row.names(resumen_puntuacion_ano) <- NULL
+
+utils::write.csv(
+  resumen_puntuacion_ano,
+  file.path(directorio_salida, "retrascore_resumen_puntuacion_ano.csv"),
+  row.names = FALSE,
+  na = ""
+)
+
+cat("Pacientes en el RDS original:", n_pacientes_rds_original, "\n")
+cat("Pacientes excluidos por ano de trauma 2925:", n_excluidos_ano_2925, "\n")
+cat("Pacientes incluidos en el analisis:", nrow(cohorte), "\n")
+cat("Pacientes con RETRASCORE reconstruible:", sum(!is.na(retrascore)), "\n")
+cat("Rango observado de RETRASCORE antes de agrupar:", paste(range(retrascore, na.rm = TRUE), collapse = " a "), "\n")
+cat("Categoria superior utilizada: 14+ puntos\n")
+cat("Anos observados:", paste(sort(unique(stats::na.omit(resultado_paciente$ano))), collapse = ", "), "\n")
+```
+
+## 6.1. Mortalidad observada por RETRASCORE y ano
+
+Cada celda representa la mortalidad observada a 30 dias entre los pacientes con
+desenlace conocido para esa puntuacion RETRASCORE y ese ano. El color representa
+el porcentaje de mortalidad y la etiqueta interior muestra el numero total de
+pacientes de la celda. Las puntuaciones de 14 o mas se agrupan como `14+`.
+
+```{r grafico-mortalidad, echo=FALSE, fig.cap="Mortalidad observada a 30 dias por puntuacion RETRASCORE y ano."}
+plot_metric_heatmap(
+  resumen_puntuacion_ano,
+  "mortalidad_porcentaje",
+  "Mortalidad observada por RETRASCORE y año",
+  "Mortalidad (%)"
+)
+```
+
+```{r guardar-grafico-mortalidad, include=FALSE}
+grDevices::png(
+  file.path(directorio_salida, "mortalidad_por_retrascore_ano.png"),
+  width = 2000, height = 1200, res = 160
+)
+plot_metric_heatmap(
+  resumen_puntuacion_ano,
+  "mortalidad_porcentaje",
+  "Mortalidad observada por RETRASCORE y año",
+  "Mortalidad (%)"
+)
+grDevices::dev.off()
+```
+
+## 6.2. Exactitud de clasificacion por RETRASCORE y ano
+
+Cada celda representa el porcentaje de clasificaciones correctas entre los
+pacientes con desenlace conocido y probabilidad calculable. El color representa
+la exactitud y la etiqueta interior muestra el numero total de pacientes de la
+celda. Las puntuaciones de 14 o mas se agrupan como `14+`. La muerte se predice
+cuando la probabilidad publicada es mayor o igual que
+`r params$probability_cutoff`.
+
+```{r grafico-exactitud, echo=FALSE, fig.cap="Exactitud de clasificacion por puntuacion RETRASCORE y ano."}
+plot_metric_heatmap(
+  resumen_puntuacion_ano,
+  "exactitud_porcentaje",
+  "Exactitud de clasificacion por RETRASCORE y año",
+  "Exactitud (%)"
+)
+```
+
+```{r guardar-grafico-exactitud, include=FALSE}
+grDevices::png(
+  file.path(directorio_salida, "exactitud_por_retrascore_ano.png"),
+  width = 2000, height = 1200, res = 160
+)
+plot_metric_heatmap(
+  resumen_puntuacion_ano,
+  "exactitud_porcentaje",
+  "Exactitud de clasificacion por RETRASCORE y año",
+  "Exactitud (%)"
+)
+grDevices::dev.off()
+```
+
+## Notas de reproducibilidad
+
+- No se imputan valores ausentes. Un RETRASCORE y una probabilidad solo se
+  calculan cuando todos sus componentes estan disponibles.
+- Las puntuaciones RETRASCORE de 14 o mas se presentan en una categoria comun
+  `14+`; no se elimina ningun paciente por este agrupamiento.
+- Se excluye el unico registro con ano de trauma 2925 por tratarse de un valor
+  imposible. El archivo RDS original no se modifica.
+- Los denominadores de mortalidad y exactitud se calculan por separado.
+
+```{r session-info}
+sessionInfo()
+```

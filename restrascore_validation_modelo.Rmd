@@ -526,3 +526,138 @@ resumen_muestras_regresion
 tabla_regresion_logistica
 tabla_rendimiento_modelo
 ```
+
+# 4. Logistic regression using the variables selected by LASSO
+
+This additional model is fitted only with the variables selected by LASSO at
+`lambda.1se`. Unlike the regression in Section 3, the predictor formula is not
+manually specified. It is built directly from `predictores_regresion`. The
+model is fitted in the derivation sample and evaluated without refitting in the
+temporal validation sample.
+
+```{r}
+# Build the regression formula directly from the LASSO-selected variables.
+formula_regresion_seleccion_lasso <- if (length(predictores_regresion) > 0) {
+  reformulate(predictores_regresion, response = "mortalidad_30d")
+} else {
+  mortalidad_30d ~ 1
+}
+
+variables_modelo_seleccion_lasso <- data.frame(
+  variable = predictores_regresion,
+  row.names = NULL
+)
+
+modelo_regresion_seleccion_lasso <- glm(
+  formula_regresion_seleccion_lasso,
+  data = datos_derivacion,
+  family = binomial(link = "logit")
+)
+
+stopifnot(modelo_regresion_seleccion_lasso$converged)
+stopifnot(nobs(modelo_regresion_seleccion_lasso) == nrow(datos_derivacion))
+if (anyNA(coef(modelo_regresion_seleccion_lasso))) {
+  stop(
+    "Non-estimable coefficients in the LASSO-selected regression: ",
+    "check collinearity before validation."
+  )
+}
+
+# Estimate performance in derivation and temporal validation without refitting.
+tabla_rendimiento_seleccion_lasso <- rbind(
+  evaluar_modelo(
+    modelo_regresion_seleccion_lasso,
+    datos_derivacion,
+    "Derivación 2015-2017"
+  ),
+  evaluar_modelo(
+    modelo_regresion_seleccion_lasso,
+    datos_validacion,
+    "Validación 2018-2019"
+  )
+)
+
+columnas_redondeo_lasso <- c(
+  "auc", "brier", "intercepto_calibracion", "pendiente_calibracion"
+)
+tabla_rendimiento_seleccion_lasso[, columnas_redondeo_lasso] <- round(
+  tabla_rendimiento_seleccion_lasso[, columnas_redondeo_lasso],
+  3
+)
+
+# Create the coefficient table for the new regression.
+coeficientes_seleccion_lasso <- summary(
+  modelo_regresion_seleccion_lasso
+)$coefficients
+
+tabla_regresion_seleccion_lasso <- data.frame(
+  Variable = rownames(coeficientes_seleccion_lasso),
+  beta = coeficientes_seleccion_lasso[, "Estimate"],
+  Puntos = ifelse(
+    rownames(coeficientes_seleccion_lasso) == "(Intercept)",
+    NA_integer_,
+    as.integer(round(2 * coeficientes_seleccion_lasso[, "Estimate"]))
+  ),
+  OR = exp(coeficientes_seleccion_lasso[, "Estimate"]),
+  IC95_inferior = exp(
+    coeficientes_seleccion_lasso[, "Estimate"] -
+      1.96 * coeficientes_seleccion_lasso[, "Std. Error"]
+  ),
+  IC95_superior = exp(
+    coeficientes_seleccion_lasso[, "Estimate"] +
+      1.96 * coeficientes_seleccion_lasso[, "Std. Error"]
+  ),
+  orden = seq_len(nrow(coeficientes_seleccion_lasso)) * 2,
+  row.names = NULL
+)
+
+# Add the reference categories for selected categorical variables.
+referencias_seleccion_lasso <- data.frame(
+  variable_padre = c("edad_categoria", "pupilas"),
+  Variable = c("edad_categoria<50", "pupilasnormal"),
+  stringsAsFactors = FALSE
+)
+referencias_seleccion_lasso <- referencias_seleccion_lasso[
+  referencias_seleccion_lasso$variable_padre %in% predictores_regresion,
+  , drop = FALSE
+]
+
+if (nrow(referencias_seleccion_lasso) > 0) {
+  filas_referencia_seleccion_lasso <- do.call(rbind, lapply(
+    seq_len(nrow(referencias_seleccion_lasso)),
+    function(i) {
+      variable_padre <- referencias_seleccion_lasso$variable_padre[i]
+      posiciones <- grep(
+        paste0("^", variable_padre),
+        tabla_regresion_seleccion_lasso$Variable
+      )
+      data.frame(
+        Variable = referencias_seleccion_lasso$Variable[i],
+        beta = 0,
+        Puntos = 0L,
+        OR = 1,
+        IC95_inferior = NA_real_,
+        IC95_superior = NA_real_,
+        orden = min(tabla_regresion_seleccion_lasso$orden[posiciones]) - 1,
+        row.names = NULL
+      )
+    }
+  ))
+
+  tabla_regresion_seleccion_lasso <- rbind(
+    tabla_regresion_seleccion_lasso,
+    filas_referencia_seleccion_lasso
+  )
+}
+
+tabla_regresion_seleccion_lasso <- tabla_regresion_seleccion_lasso[
+  order(tabla_regresion_seleccion_lasso$orden),
+  setdiff(names(tabla_regresion_seleccion_lasso), "orden")
+]
+rownames(tabla_regresion_seleccion_lasso) <- NULL
+
+formula_regresion_seleccion_lasso
+variables_modelo_seleccion_lasso
+tabla_regresion_seleccion_lasso
+tabla_rendimiento_seleccion_lasso
+```
