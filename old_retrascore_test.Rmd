@@ -1,0 +1,62 @@
+---
+title: "Untitled"
+output: html_document
+date: "2026-09-21"
+---
+
+```{r}
+desarrollo_df <- haven::read_sav("C:/Users/user/OneDrive - udl.cat/Desktop/RETRASCORE_VALIDATION/DESARROLLO.sav")
+desarrollo_df
+```
+
+```{r}
+validacion_df <- haven::read_sav("C:/Users/user/OneDrive - udl.cat/Desktop/RETRASCORE_VALIDATION/VALIDACION.sav")
+validacion_df
+```
+
+## RETRAUCI cohorts with the same study periods
+
+```{r}
+retrauci_df <- read.csv2(
+  "C:/Users/user/OneDrive - udl.cat/Desktop/RETRASCORE_VALIDATION/retrauci.csv",
+  stringsAsFactors = FALSE
+)
+
+retrauci_df$fecha_trauma <- as.Date(
+  retrauci_df$fecha_trauma,
+  format = "%d/%m/%Y"
+)
+retrauci_df$anio_trauma <- as.integer(format(
+  retrauci_df$fecha_trauma,
+  "%Y"
+))
+
+# Same years as DESARROLLO: 2015-2017
+retrauci_desarrollo_df <- retrauci_df[
+  retrauci_df$anio_trauma %in% 2015:2017,
+]
+
+# Same years as VALIDACION: 2018-2019
+retrauci_validacion_df <- retrauci_df[
+  retrauci_df$anio_trauma %in% 2018:2019,
+]
+
+retrauci_desarrollo_df
+retrauci_validacion_df
+```
+
+## Rows with one or more missing values
+
+```{r}
+rows_with_na <- data.frame(
+  dataset = c("DESARROLLO", "VALIDACION"),
+  total_rows = c(nrow(desarrollo_df), nrow(validacion_df)),
+  rows_with_one_or_more_na = c(
+    sum(rowSums(is.na(desarrollo_df)) >= 1),
+    sum(rowSums(is.na(validacion_df)) >= 1)
+  )
+)
+
+rows_with_na
+```
+

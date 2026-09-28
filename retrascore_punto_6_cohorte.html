@@ -362,6 +362,8 @@ cohorte_retrascore.rds</h3>
 <li><a href="#mortalidad-y-exactitud-de-clasificacion-por-retrascore-y-ano" id="toc-mortalidad-y-exactitud-de-clasificacion-por-retrascore-y-ano">6.
 Mortalidad y exactitud de clasificacion por RETRASCORE y ano</a>
 <ul>
+<li><a href="#mortalidad-estimada-por-grupo-de-retrascore" id="toc-mortalidad-estimada-por-grupo-de-retrascore">Mortalidad estimada
+por grupo de RETRASCORE</a></li>
 <li><a href="#mortalidad-observada-por-retrascore-y-ano" id="toc-mortalidad-observada-por-retrascore-y-ano">6.1. Mortalidad
 observada por RETRASCORE y ano</a></li>
 <li><a href="#exactitud-de-clasificacion-por-retrascore-y-ano" id="toc-exactitud-de-clasificacion-por-retrascore-y-ano">6.2. Exactitud
@@ -573,6 +575,129 @@ cat(&quot;Pacientes en el RDS original:&quot;, n_pacientes_rds_original, &quot;\
 <pre><code>## Categoria superior utilizada: 14+ puntos</code></pre>
 <pre class="r"><code>cat(&quot;Anos observados:&quot;, paste(sort(unique(stats::na.omit(resultado_paciente$ano))), collapse = &quot;, &quot;), &quot;\n&quot;)</code></pre>
 <pre><code>## Anos observados: 2015, 2016, 2017, 2018, 2019, 2020, 2021, 2022, 2023, 2024, 2025</code></pre>
+<div id="mortalidad-estimada-por-grupo-de-retrascore" class="section level2">
+<h2>Mortalidad estimada por grupo de RETRASCORE</h2>
+<p>La mortalidad estimada es la media de las probabilidades individuales
+calculadas mediante la ecuacion logistica original de RETRASCORE. La
+mortalidad observada se calcula entre los pacientes con desenlace a 30
+dias conocido.</p>
+<table>
+<caption>Mortalidad estimada y observada por grupo de
+RETRASCORE</caption>
+<colgroup>
+<col width="15%" />
+<col width="14%" />
+<col width="34%" />
+<col width="35%" />
+</colgroup>
+<thead>
+<tr class="header">
+<th align="right">RETRASCORE</th>
+<th align="right">Pacientes</th>
+<th align="right">Mortalidad estimada (%)</th>
+<th align="right">Mortalidad observada (%)</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td align="right">-1</td>
+<td align="right">1079</td>
+<td align="right">0.33</td>
+<td align="right">0.09</td>
+</tr>
+<tr class="even">
+<td align="right">0</td>
+<td align="right">2366</td>
+<td align="right">0.51</td>
+<td align="right">0.04</td>
+</tr>
+<tr class="odd">
+<td align="right">1</td>
+<td align="right">2349</td>
+<td align="right">0.89</td>
+<td align="right">0.30</td>
+</tr>
+<tr class="even">
+<td align="right">2</td>
+<td align="right">1891</td>
+<td align="right">1.51</td>
+<td align="right">0.90</td>
+</tr>
+<tr class="odd">
+<td align="right">3</td>
+<td align="right">1500</td>
+<td align="right">2.56</td>
+<td align="right">2.47</td>
+</tr>
+<tr class="even">
+<td align="right">4</td>
+<td align="right">1444</td>
+<td align="right">4.23</td>
+<td align="right">6.09</td>
+</tr>
+<tr class="odd">
+<td align="right">5</td>
+<td align="right">1412</td>
+<td align="right">6.52</td>
+<td align="right">8.15</td>
+</tr>
+<tr class="even">
+<td align="right">6</td>
+<td align="right">1104</td>
+<td align="right">10.46</td>
+<td align="right">11.96</td>
+</tr>
+<tr class="odd">
+<td align="right">7</td>
+<td align="right">957</td>
+<td align="right">16.13</td>
+<td align="right">22.91</td>
+</tr>
+<tr class="even">
+<td align="right">8</td>
+<td align="right">708</td>
+<td align="right">24.33</td>
+<td align="right">34.14</td>
+</tr>
+<tr class="odd">
+<td align="right">9</td>
+<td align="right">492</td>
+<td align="right">34.62</td>
+<td align="right">42.36</td>
+</tr>
+<tr class="even">
+<td align="right">10</td>
+<td align="right">345</td>
+<td align="right">46.13</td>
+<td align="right">50.87</td>
+</tr>
+<tr class="odd">
+<td align="right">11</td>
+<td align="right">267</td>
+<td align="right">57.42</td>
+<td align="right">60.53</td>
+</tr>
+<tr class="even">
+<td align="right">12</td>
+<td align="right">221</td>
+<td align="right">69.07</td>
+<td align="right">75.11</td>
+</tr>
+<tr class="odd">
+<td align="right">13</td>
+<td align="right">154</td>
+<td align="right">79.20</td>
+<td align="right">81.17</td>
+</tr>
+<tr class="even">
+<td align="right">14+</td>
+<td align="right">417</td>
+<td align="right">92.47</td>
+<td align="right">93.25</td>
+</tr>
+</tbody>
+</table>
+</div>
 <div id="mortalidad-observada-por-retrascore-y-ano" class="section level2">
 <h2>6.1. Mortalidad observada por RETRASCORE y ano</h2>
 <p>Cada celda representa la mortalidad observada a 30 dias entre los

@@ -1,0 +1,24 @@
+"Variable","Design_column","LASSO coefficient at lambda.1se","Selected at lambda.1se","LASSO coefficient at lambda.min"
+"edad_categoria","edad_categoria50-65",0.279901873754572,TRUE,0.807608551265315
+"edad_categoria","edad_categoria66-75",0.905787757315944,TRUE,1.50284107010807
+"edad_categoria","edad_categoria>75",1.74884938946985,TRUE,2.37520696012215
+"genero_masculino","genero_masculino",0,FALSE,0.158946311934371
+"precoag","precoag",0.454157984401094,TRUE,0.425235928059077
+"atencion_prehospitalaria_medica","atencion_prehospitalaria_medica",0,FALSE,0
+"iot_prehospitalaria","iot_prehospitalaria",0.0382504536766961,TRUE,0.208672749386769
+"trauma_penetrante","trauma_penetrante",0,FALSE,0
+"mecanismo_alto_riesgo","mecanismo_alto_riesgo",0.495244378920916,TRUE,0.561569847746143
+"pupilas","pupilasmidriasis unilateral",0.989488950509001,TRUE,1.15546656910155
+"pupilas","pupilasmidriasis bilateral",2.7718384207311,TRUE,3.1764790457313
+"gcs_menor_igual_8","gcs_menor_igual_8",1.04636640384015,TRUE,1.04844234797861
+"mais_cabeza","mais_cabeza",0.687510243971461,TRUE,0.883874737298397
+"mais_torax","mais_torax",0,FALSE,-0.147780288595897
+"mais_abdomen","mais_abdomen",0,FALSE,0
+"mais_ext_superior","mais_ext_superior",0,FALSE,-0.420354887798098
+"mais_ext_inferior","mais_ext_inferior",0,FALSE,-0.137269426833328
+"mais_externo","mais_externo",0.196332656022402,TRUE,0.828997262495112
+"fallo_hemodinamico","fallo_hemodinamico",0.948874063600806,TRUE,1.06421502719556
+"fallo_respiratorio","fallo_respiratorio",0.434642114194388,TRUE,0.620254406286439
+"coagulopatia_24h","coagulopatia_24h",0.431184716581396,TRUE,0.632464036082927
+"ventilacion_mecanica","ventilacion_mecanica",0.356059916563292,TRUE,0.449258851266219
+"hemorragia_masiva","hemorragia_masiva",0.507948868697764,TRUE,0.753122071559092

@@ -1,0 +1,127 @@
+"Step_index","Step","AIC","Variable","Included"
+0,"Initial full model",3388.96844456834,"genero_masculino",TRUE
+0,"Initial full model",3388.96844456834,"edad_categoria",TRUE
+0,"Initial full model",3388.96844456834,"precoag",TRUE
+0,"Initial full model",3388.96844456834,"atencion_prehospitalaria_medica",TRUE
+0,"Initial full model",3388.96844456834,"iot_prehospitalaria",TRUE
+0,"Initial full model",3388.96844456834,"trauma_penetrante",TRUE
+0,"Initial full model",3388.96844456834,"mecanismo_agrupado",TRUE
+0,"Initial full model",3388.96844456834,"mecanismo_alto_riesgo",TRUE
+0,"Initial full model",3388.96844456834,"pupilas",TRUE
+0,"Initial full model",3388.96844456834,"gcs_menor_igual_8",TRUE
+0,"Initial full model",3388.96844456834,"mais_cabeza",TRUE
+0,"Initial full model",3388.96844456834,"mais_torax",TRUE
+0,"Initial full model",3388.96844456834,"mais_abdomen",TRUE
+0,"Initial full model",3388.96844456834,"mais_ext_superior",TRUE
+0,"Initial full model",3388.96844456834,"mais_ext_inferior",TRUE
+0,"Initial full model",3388.96844456834,"mais_externo",TRUE
+0,"Initial full model",3388.96844456834,"fallo_hemodinamico",TRUE
+0,"Initial full model",3388.96844456834,"fallo_respiratorio",TRUE
+0,"Initial full model",3388.96844456834,"coagulopatia_24h",TRUE
+0,"Initial full model",3388.96844456834,"ventilacion_mecanica",TRUE
+0,"Initial full model",3388.96844456834,"hemorragia_masiva",TRUE
+1,"- mecanismo_agrupado",3374.95669306505,"genero_masculino",TRUE
+1,"- mecanismo_agrupado",3374.95669306505,"edad_categoria",TRUE
+1,"- mecanismo_agrupado",3374.95669306505,"precoag",TRUE
+1,"- mecanismo_agrupado",3374.95669306505,"atencion_prehospitalaria_medica",TRUE
+1,"- mecanismo_agrupado",3374.95669306505,"iot_prehospitalaria",TRUE
+1,"- mecanismo_agrupado",3374.95669306505,"trauma_penetrante",TRUE
+1,"- mecanismo_agrupado",3374.95669306505,"mecanismo_agrupado",FALSE
+1,"- mecanismo_agrupado",3374.95669306505,"mecanismo_alto_riesgo",TRUE
+1,"- mecanismo_agrupado",3374.95669306505,"pupilas",TRUE
+1,"- mecanismo_agrupado",3374.95669306505,"gcs_menor_igual_8",TRUE
+1,"- mecanismo_agrupado",3374.95669306505,"mais_cabeza",TRUE
+1,"- mecanismo_agrupado",3374.95669306505,"mais_torax",TRUE
+1,"- mecanismo_agrupado",3374.95669306505,"mais_abdomen",TRUE
+1,"- mecanismo_agrupado",3374.95669306505,"mais_ext_superior",TRUE
+1,"- mecanismo_agrupado",3374.95669306505,"mais_ext_inferior",TRUE
+1,"- mecanismo_agrupado",3374.95669306505,"mais_externo",TRUE
+1,"- mecanismo_agrupado",3374.95669306505,"fallo_hemodinamico",TRUE
+1,"- mecanismo_agrupado",3374.95669306505,"fallo_respiratorio",TRUE
+1,"- mecanismo_agrupado",3374.95669306505,"coagulopatia_24h",TRUE
+1,"- mecanismo_agrupado",3374.95669306505,"ventilacion_mecanica",TRUE
+1,"- mecanismo_agrupado",3374.95669306505,"hemorragia_masiva",TRUE
+2,"- mais_abdomen",3372.9624462184,"genero_masculino",TRUE
+2,"- mais_abdomen",3372.9624462184,"edad_categoria",TRUE
+2,"- mais_abdomen",3372.9624462184,"precoag",TRUE
+2,"- mais_abdomen",3372.9624462184,"atencion_prehospitalaria_medica",TRUE
+2,"- mais_abdomen",3372.9624462184,"iot_prehospitalaria",TRUE
+2,"- mais_abdomen",3372.9624462184,"trauma_penetrante",TRUE
+2,"- mais_abdomen",3372.9624462184,"mecanismo_agrupado",FALSE
+2,"- mais_abdomen",3372.9624462184,"mecanismo_alto_riesgo",TRUE
+2,"- mais_abdomen",3372.9624462184,"pupilas",TRUE
+2,"- mais_abdomen",3372.9624462184,"gcs_menor_igual_8",TRUE
+2,"- mais_abdomen",3372.9624462184,"mais_cabeza",TRUE
+2,"- mais_abdomen",3372.9624462184,"mais_torax",TRUE
+2,"- mais_abdomen",3372.9624462184,"mais_abdomen",FALSE
+2,"- mais_abdomen",3372.9624462184,"mais_ext_superior",TRUE
+2,"- mais_abdomen",3372.9624462184,"mais_ext_inferior",TRUE
+2,"- mais_abdomen",3372.9624462184,"mais_externo",TRUE
+2,"- mais_abdomen",3372.9624462184,"fallo_hemodinamico",TRUE
+2,"- mais_abdomen",3372.9624462184,"fallo_respiratorio",TRUE
+2,"- mais_abdomen",3372.9624462184,"coagulopatia_24h",TRUE
+2,"- mais_abdomen",3372.9624462184,"ventilacion_mecanica",TRUE
+2,"- mais_abdomen",3372.9624462184,"hemorragia_masiva",TRUE
+3,"- trauma_penetrante",3371.06499579528,"genero_masculino",TRUE
+3,"- trauma_penetrante",3371.06499579528,"edad_categoria",TRUE
+3,"- trauma_penetrante",3371.06499579528,"precoag",TRUE
+3,"- trauma_penetrante",3371.06499579528,"atencion_prehospitalaria_medica",TRUE
+3,"- trauma_penetrante",3371.06499579528,"iot_prehospitalaria",TRUE
+3,"- trauma_penetrante",3371.06499579528,"trauma_penetrante",FALSE
+3,"- trauma_penetrante",3371.06499579528,"mecanismo_agrupado",FALSE
+3,"- trauma_penetrante",3371.06499579528,"mecanismo_alto_riesgo",TRUE
+3,"- trauma_penetrante",3371.06499579528,"pupilas",TRUE
+3,"- trauma_penetrante",3371.06499579528,"gcs_menor_igual_8",TRUE
+3,"- trauma_penetrante",3371.06499579528,"mais_cabeza",TRUE
+3,"- trauma_penetrante",3371.06499579528,"mais_torax",TRUE
+3,"- trauma_penetrante",3371.06499579528,"mais_abdomen",FALSE
+3,"- trauma_penetrante",3371.06499579528,"mais_ext_superior",TRUE
+3,"- trauma_penetrante",3371.06499579528,"mais_ext_inferior",TRUE
+3,"- trauma_penetrante",3371.06499579528,"mais_externo",TRUE
+3,"- trauma_penetrante",3371.06499579528,"fallo_hemodinamico",TRUE
+3,"- trauma_penetrante",3371.06499579528,"fallo_respiratorio",TRUE
+3,"- trauma_penetrante",3371.06499579528,"coagulopatia_24h",TRUE
+3,"- trauma_penetrante",3371.06499579528,"ventilacion_mecanica",TRUE
+3,"- trauma_penetrante",3371.06499579528,"hemorragia_masiva",TRUE
+4,"- atencion_prehospitalaria_medica",3369.20326308417,"genero_masculino",TRUE
+4,"- atencion_prehospitalaria_medica",3369.20326308417,"edad_categoria",TRUE
+4,"- atencion_prehospitalaria_medica",3369.20326308417,"precoag",TRUE
+4,"- atencion_prehospitalaria_medica",3369.20326308417,"atencion_prehospitalaria_medica",FALSE
+4,"- atencion_prehospitalaria_medica",3369.20326308417,"iot_prehospitalaria",TRUE
+4,"- atencion_prehospitalaria_medica",3369.20326308417,"trauma_penetrante",FALSE
+4,"- atencion_prehospitalaria_medica",3369.20326308417,"mecanismo_agrupado",FALSE
+4,"- atencion_prehospitalaria_medica",3369.20326308417,"mecanismo_alto_riesgo",TRUE
+4,"- atencion_prehospitalaria_medica",3369.20326308417,"pupilas",TRUE
+4,"- atencion_prehospitalaria_medica",3369.20326308417,"gcs_menor_igual_8",TRUE
+4,"- atencion_prehospitalaria_medica",3369.20326308417,"mais_cabeza",TRUE
+4,"- atencion_prehospitalaria_medica",3369.20326308417,"mais_torax",TRUE
+4,"- atencion_prehospitalaria_medica",3369.20326308417,"mais_abdomen",FALSE
+4,"- atencion_prehospitalaria_medica",3369.20326308417,"mais_ext_superior",TRUE
+4,"- atencion_prehospitalaria_medica",3369.20326308417,"mais_ext_inferior",TRUE
+4,"- atencion_prehospitalaria_medica",3369.20326308417,"mais_externo",TRUE
+4,"- atencion_prehospitalaria_medica",3369.20326308417,"fallo_hemodinamico",TRUE
+4,"- atencion_prehospitalaria_medica",3369.20326308417,"fallo_respiratorio",TRUE
+4,"- atencion_prehospitalaria_medica",3369.20326308417,"coagulopatia_24h",TRUE
+4,"- atencion_prehospitalaria_medica",3369.20326308417,"ventilacion_mecanica",TRUE
+4,"- atencion_prehospitalaria_medica",3369.20326308417,"hemorragia_masiva",TRUE
+5,"- mais_ext_inferior",3369.1106694068,"genero_masculino",TRUE
+5,"- mais_ext_inferior",3369.1106694068,"edad_categoria",TRUE
+5,"- mais_ext_inferior",3369.1106694068,"precoag",TRUE
+5,"- mais_ext_inferior",3369.1106694068,"atencion_prehospitalaria_medica",FALSE
+5,"- mais_ext_inferior",3369.1106694068,"iot_prehospitalaria",TRUE
+5,"- mais_ext_inferior",3369.1106694068,"trauma_penetrante",FALSE
+5,"- mais_ext_inferior",3369.1106694068,"mecanismo_agrupado",FALSE
+5,"- mais_ext_inferior",3369.1106694068,"mecanismo_alto_riesgo",TRUE
+5,"- mais_ext_inferior",3369.1106694068,"pupilas",TRUE
+5,"- mais_ext_inferior",3369.1106694068,"gcs_menor_igual_8",TRUE
+5,"- mais_ext_inferior",3369.1106694068,"mais_cabeza",TRUE
+5,"- mais_ext_inferior",3369.1106694068,"mais_torax",TRUE
+5,"- mais_ext_inferior",3369.1106694068,"mais_abdomen",FALSE
+5,"- mais_ext_inferior",3369.1106694068,"mais_ext_superior",TRUE
+5,"- mais_ext_inferior",3369.1106694068,"mais_ext_inferior",FALSE
+5,"- mais_ext_inferior",3369.1106694068,"mais_externo",TRUE
+5,"- mais_ext_inferior",3369.1106694068,"fallo_hemodinamico",TRUE
+5,"- mais_ext_inferior",3369.1106694068,"fallo_respiratorio",TRUE
+5,"- mais_ext_inferior",3369.1106694068,"coagulopatia_24h",TRUE
+5,"- mais_ext_inferior",3369.1106694068,"ventilacion_mecanica",TRUE
+5,"- mais_ext_inferior",3369.1106694068,"hemorragia_masiva",TRUE

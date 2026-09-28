@@ -1,0 +1,1086 @@
+---
+title: "New RETRASCORE model using stepwise logistic regression"
+subtitle: "Model development: 2015-2019; temporal validation: 2020-2025"
+date: "`r format(Sys.Date(), '%Y-%m-%d')`"
+output:
+  html_document:
+    toc: true
+    toc_depth: 3
+    number_sections: true
+    self_contained: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo = TRUE,
+  warning = FALSE,
+  message = FALSE,
+  fig.width = 10,
+  fig.height = 6,
+  dpi = 120
+)
+
+try(Sys.setlocale("LC_CTYPE", "English_United States.utf8"), silent = TRUE)
+
+required_packages <- c("dplyr", "ggplot2", "MASS", "pROC")
+missing_packages <- required_packages[
+  !vapply(required_packages, requireNamespace, logical(1), quietly = TRUE)
+]
+if (length(missing_packages)) {
+  stop(
+    "Install the following packages before knitting: ",
+    paste(missing_packages, collapse = ", ")
+  )
+}
+
+library(dplyr)
+library(ggplot2)
+
+source_file <- "cohorte_retrascore.rds"
+if (!file.exists(source_file)) {
+  stop("cohorte_retrascore.rds was not found in the working directory.")
+}
+
+cohort <- readRDS(source_file)
+output_dir <- "outputs_retrascore_new_stepwise_model"
+dir.create(output_dir, showWarnings = FALSE, recursive = TRUE)
+
+# Normalize the UTF-8 trauma-year name for compatibility across Windows locales.
+ascii_names <- tolower(iconv(
+  names(cohort), from = "UTF-8", to = "ASCII//TRANSLIT"
+))
+year_index <- which(ascii_names == "ano_trauma")
+if (length(year_index) != 1L) {
+  stop("The trauma-year column could not be identified uniquely.")
+}
+names(cohort)[year_index] <- "ano_trauma"
+
+```
+
+# Analysis design
+
+Model development is performed exclusively with patients from 2015-2019. The
+2020-2025 cohort is kept separate and is used only for temporal validation. No
+variable selection, coefficient estimation, point assignment, or calibration
+is performed with the 2020-2025 outcomes.
+
+Following the Datanovia stepwise-logistic-regression workflow, the modelling
+procedure follows these steps:
+
+1. Fit a full binomial logistic regression containing every predictor explicitly
+   listed in the editable candidate-variable block below.
+2. Apply bidirectional stepwise selection with `MASS::stepAIC()`, minimizing
+   Akaike's information criterion (AIC).
+3. Use the refitted model returned by `stepAIC()` as the new multivariable
+   logistic model.
+4. Multiply every non-intercept coefficient by 2 and round it to the nearest
+   integer, following the article.
+5. Sum those same fixed points for every patient in both cohorts.
+6. Estimate the score-to-mortality equation in 2015-2019 and apply it unchanged
+   to both cohorts.
+7. Compare observed and expected 30-day mortality in 2015-2019 and 2020-2025.
+
+Variable selection and coefficient estimation use only the 2015-2019 cohort.
+The 2020-2025 outcomes are not examined by the stepwise procedure and no
+logistic regression is fitted in the temporal-validation cohort.
+
+# Candidate variables and cohorts
+
+Every variable explicitly listed below enters the initial full model. To change
+the candidate set, add or remove a quoted column name in `candidate_variables`.
+Identifiers, the temporal split variable, outcomes, post-outcome variables, and
+the TRISS prediction are intentionally excluded.
+
+```{r define-cohorts}
+# EDIT THIS VECTOR TO CHANGE THE VARIABLES OFFERED TO stepAIC().
+# Add a variable: write its column name in quotes followed by a comma.
+# Remove a variable: delete its line (or place # at the start of that line).
+# Every variable in this vector enters the initial full logistic model.
+candidate_variables <- c(
+  "genero_masculino",
+  #"edad",
+  "edad_categoria",
+  "precoag",
+  "atencion_prehospitalaria_medica",
+  "iot_prehospitalaria",
+  "trauma_penetrante",
+  #"tipo_lesion",
+  "mecanismo_agrupado",
+  "mecanismo_alto_riesgo",
+  "pupilas",
+  #"gcs_total",
+  "gcs_menor_igual_8",
+  #"ais_cabeza",
+  "mais_cabeza",
+  #"ais_torax",
+  "mais_torax",
+  #"ais_abdomen",
+  "mais_abdomen",
+  #"ais_ext_superior",
+  "mais_ext_superior",
+  #"ais_ext_inferior",
+  "mais_ext_inferior",
+  #"ais_externo",
+  "mais_externo",
+  "fallo_hemodinamico",
+  "fallo_respiratorio",
+  "coagulopatia_24h",
+  "ventilacion_mecanica",
+  "hemorragia_masiva"
+)
+
+# TRISS is an already fitted prognostic model and remains an external comparator;
+# it is not offered to stepAIC() as a predictor of the new RETRASCORE.
+comparison_variables <- c("probabilidad_muerte_triss")
+
+protected_variables <- c(
+  "id_fila", "historia", "registro", "hospital", "ano_trauma",
+  "mortalidad_intrahospitalaria", "mortalidad_30d",
+  "dias_hasta_muerte", "dias_estancia_uci",
+  comparison_variables
+)
+if (!length(candidate_variables)) stop("The candidate-variable list is empty.")
+if (anyDuplicated(candidate_variables)) {
+  stop("The candidate-variable list contains duplicated names.")
+}
+invalid_candidates <- intersect(candidate_variables, protected_variables)
+if (length(invalid_candidates)) {
+  stop(
+    "Identifiers, outcomes, post-outcome variables, temporal split variables, ",
+    "and TRISS cannot be candidates: ", paste(invalid_candidates, collapse = ", ")
+  )
+}
+
+required_variables <- c(
+  "ano_trauma", "mortalidad_30d", candidate_variables
+)
+missing_variables <- setdiff(required_variables, names(cohort))
+if (length(missing_variables)) {
+  stop("Missing required variables: ", paste(missing_variables, collapse = ", "))
+}
+
+binary_variables <- c(
+  "genero_masculino", "precoag", "atencion_prehospitalaria_medica",
+  "iot_prehospitalaria", "trauma_penetrante", "mecanismo_alto_riesgo",
+  "gcs_menor_igual_8", "mais_cabeza", "mais_torax", "mais_abdomen",
+  "mais_ext_superior", "mais_ext_inferior", "mais_externo",
+  "fallo_hemodinamico", "fallo_respiratorio", "coagulopatia_24h",
+  "ventilacion_mecanica", "hemorragia_masiva"
+)
+check_binary <- function(x, variable_name) {
+  values <- unique(stats::na.omit(x))
+  if (!all(values %in% c(0, 1))) {
+    stop("Variable '", variable_name, "' contains values other than 0, 1 or NA.")
+  }
+  as.integer(x)
+}
+for (variable_name in binary_variables) {
+  cohort[[variable_name]] <- check_binary(cohort[[variable_name]], variable_name)
+}
+cohort$mortalidad_30d <- check_binary(
+  cohort$mortalidad_30d, "mortalidad_30d"
+)
+
+valid_age_levels <- c("<50", "50-65", "66-75", ">75")
+valid_pupil_levels <- c(
+  "normal", "midriasis unilateral", "midriasis bilateral"
+)
+unexpected_age <- setdiff(
+  unique(stats::na.omit(as.character(cohort$edad_categoria))),
+  valid_age_levels
+)
+unexpected_pupils <- setdiff(
+  unique(stats::na.omit(as.character(cohort$pupilas))),
+  valid_pupil_levels
+)
+if (length(unexpected_age)) {
+  stop("Unexpected age categories: ", paste(unexpected_age, collapse = ", "))
+}
+if (length(unexpected_pupils)) {
+  stop("Unexpected pupil categories: ", paste(unexpected_pupils, collapse = ", "))
+}
+
+# Fix the references used by model.matrix and retain all levels after filtering.
+cohort$edad_categoria <- factor(
+  as.character(cohort$edad_categoria), levels = valid_age_levels
+)
+cohort$pupilas <- factor(
+  as.character(cohort$pupilas), levels = valid_pupil_levels
+)
+cohort$tipo_lesion <- factor(cohort$tipo_lesion)
+cohort$mecanismo_agrupado <- factor(cohort$mecanismo_agrupado)
+
+eligible <- cohort %>%
+  filter(!is.na(ano_trauma), ano_trauma >= 2015, ano_trauma <= 2025) %>%
+  mutate(
+    analysis_row_id = row_number(),
+    period = ifelse(ano_trauma <= 2019, "Derivation 2015-2019", "Validation 2020-2025"),
+    period = factor(
+      period,
+      levels = c("Derivation 2015-2019", "Validation 2020-2025")
+    )
+  )
+
+derivation_all <- eligible %>% filter(period == "Derivation 2015-2019")
+validation_all <- eligible %>% filter(period == "Validation 2020-2025")
+
+# The full model and every candidate submodel use the same complete-case rows.
+# This is essential because AIC values are not comparable across different
+# numbers of observations.
+model_complete_variables <- c("mortalidad_30d", candidate_variables)
+derivation <- derivation_all[
+  complete.cases(derivation_all[, model_complete_variables, drop = FALSE]),
+  ,
+  drop = FALSE
+]
+
+if (!nrow(derivation)) stop("No complete derivation cases were available.")
+if (length(unique(derivation$mortalidad_30d)) != 2L) {
+  stop("The derivation cohort must contain survivors and deaths.")
+}
+
+cohort_flow <- data.frame(
+  Cohort = c("Derivation 2015-2019", "Validation 2020-2025"),
+  Eligible = c(nrow(derivation_all), nrow(validation_all)),
+  `Known outcome` = c(
+    sum(!is.na(derivation_all$mortalidad_30d)),
+    sum(!is.na(validation_all$mortalidad_30d))
+  ),
+  `Complete for all candidates` = c(
+    sum(complete.cases(derivation_all[, model_complete_variables, drop = FALSE])),
+    sum(complete.cases(validation_all[, model_complete_variables, drop = FALSE]))
+  ),
+  check.names = FALSE
+)
+
+knitr::kable(
+  data.frame(Candidate = candidate_variables),
+  caption = paste(
+    length(candidate_variables),
+    "candidate variables entered into the full logistic model"
+  )
+)
+knitr::kable(cohort_flow, caption = "Initial cohort flow")
+```
+
+# Stepwise logistic regression
+
+```{r stepwise-selection}
+full_model_formula <- reformulate(
+  candidate_variables,
+  response = "mortalidad_30d"
+)
+full_model <- glm(
+  full_model_formula,
+  data = derivation,
+  family = binomial(link = "logit"),
+  na.action = na.fail
+)
+if (!full_model$converged) stop("The full logistic regression did not converge.")
+if (anyNA(coef(full_model))) {
+  stop("The full logistic regression contains non-estimable coefficients.")
+}
+
+# Both-direction selection starts from the full model. At each step, stepAIC()
+# considers adding or removing a term and retains a change only when it lowers
+# AIC. The returned object is already refitted and is the new model used below.
+stepwise_model <- MASS::stepAIC(
+  full_model,
+  direction = "both",
+  trace = FALSE
+)
+if (!stepwise_model$converged) {
+  stop("The stepwise-selected logistic regression did not converge.")
+}
+if (anyNA(coef(stepwise_model))) {
+  stop("The stepwise-selected model contains non-estimable coefficients.")
+}
+
+selected_variables <- attr(terms(stepwise_model), "term.labels")
+if (!length(selected_variables)) {
+  stop("Stepwise selection produced an intercept-only model.")
+}
+
+stepwise_path <- stepwise_model$anova
+names(stepwise_path) <- make.names(names(stepwise_path), unique = TRUE)
+selection_summary <- data.frame(
+  Derivation_N = nrow(derivation),
+  Deaths = sum(derivation$mortalidad_30d),
+  Candidate_variables = length(candidate_variables),
+  Selected_variables = length(selected_variables),
+  Full_model_AIC = AIC(full_model),
+  Stepwise_model_AIC = AIC(stepwise_model),
+  AIC_reduction = AIC(full_model) - AIC(stepwise_model)
+)
+
+utils::write.csv(
+  stepwise_path,
+  file.path(output_dir, "stepwise_selection_path.csv"),
+  row.names = FALSE,
+  fileEncoding = "UTF-8"
+)
+
+knitr::kable(selection_summary, digits = 3, caption = "Stepwise selection summary")
+knitr::kable(
+  data.frame(Selected_variable = selected_variables),
+  caption = "Variables retained by bidirectional AIC selection"
+)
+knitr::kable(
+  stepwise_path,
+  digits = 3,
+  caption = "AIC path followed by stepAIC"
+)
+```
+
+## Variable-inclusion plot
+
+This plot is the logistic-regression analogue of a `leaps::regsubsets()` plot.
+Rows are complete model terms, including categorical variables as single terms;
+columns are the successive models visited by `stepAIC()`. Because the outcome
+is binary, model quality is shown with AIC rather than adjusted R-squared.
+
+```{r stepwise-inclusion-plot, fig.width=11, fig.height=9}
+step_actions <- trimws(as.character(stepwise_path$Step))
+step_actions[is.na(step_actions)] <- ""
+
+included_at_step <- vector("list", nrow(stepwise_path))
+current_variables <- candidate_variables
+included_at_step[[1]] <- current_variables
+
+if (nrow(stepwise_path) > 1L) {
+  for (step_index in 2:nrow(stepwise_path)) {
+    action <- step_actions[step_index]
+    variable_name <- trimws(sub("^[+-]\\s*", "", action))
+    if (startsWith(action, "-")) {
+      current_variables <- setdiff(current_variables, variable_name)
+    } else if (startsWith(action, "+")) {
+      current_variables <- union(current_variables, variable_name)
+    }
+    included_at_step[[step_index]] <- current_variables
+  }
+}
+
+step_labels <- ifelse(
+  seq_len(nrow(stepwise_path)) == 1L,
+  "Initial full model",
+  step_actions
+)
+aic_labels <- paste0(
+  seq_len(nrow(stepwise_path)) - 1L,
+  "\nAIC = ", formatC(stepwise_path$AIC, digits = 1, format = "f")
+)
+
+stepwise_inclusion <- do.call(
+  rbind,
+  lapply(seq_len(nrow(stepwise_path)), function(step_index) {
+    data.frame(
+      Step_index = step_index - 1L,
+      Step = step_labels[step_index],
+      AIC = stepwise_path$AIC[step_index],
+      Variable = candidate_variables,
+      Included = candidate_variables %in% included_at_step[[step_index]],
+      stringsAsFactors = FALSE
+    )
+  })
+)
+stepwise_inclusion$Variable <- factor(
+  stepwise_inclusion$Variable,
+  levels = rev(candidate_variables)
+)
+
+stepwise_inclusion_plot <- ggplot(
+  stepwise_inclusion,
+  aes(x = Step_index, y = Variable, fill = Included)
+) +
+  geom_tile(color = "white", linewidth = 0.35) +
+  scale_fill_manual(
+    values = c(`FALSE` = "grey92", `TRUE` = "#2166AC"),
+    labels = c(`FALSE` = "Excluded", `TRUE` = "Included"),
+    name = NULL
+  ) +
+  scale_x_continuous(
+    breaks = seq_len(nrow(stepwise_path)) - 1L,
+    labels = aic_labels,
+    expand = c(0, 0)
+  ) +
+  labs(
+    title = "Variables included along the bidirectional stepwise path",
+    subtitle = "Blue = included; model quality is assessed with AIC (lower is better)",
+    x = "Step and model AIC",
+    y = NULL
+  ) +
+  theme_minimal(base_size = 11) +
+  theme(
+    panel.grid = element_blank(),
+    axis.text.x = element_text(size = 9),
+    legend.position = "top",
+    plot.title.position = "plot"
+  )
+
+print(stepwise_inclusion_plot)
+ggsave(
+  file.path(output_dir, "stepwise_variable_inclusion.png"),
+  stepwise_inclusion_plot,
+  width = 11,
+  height = max(7, 0.30 * length(candidate_variables) + 2),
+  dpi = 300
+)
+utils::write.csv(
+  stepwise_inclusion,
+  file.path(output_dir, "stepwise_variable_inclusion.csv"),
+  row.names = FALSE,
+  fileEncoding = "UTF-8"
+)
+```
+
+# Logistic regression in 2015-2019
+
+The model returned by `stepAIC()` is already refitted on the 2015-2019
+derivation data. It is used unchanged for coefficient reporting and all
+subsequent score construction.
+
+```{r derivation-logistic-regression}
+model_formula <- reformulate(selected_variables, response = "mortalidad_30d")
+logistic_model <- stepwise_model
+if (!logistic_model$converged) stop("The logistic regression did not converge.")
+if (anyNA(coef(logistic_model))) {
+  stop("The logistic regression contains non-estimable coefficients.")
+}
+
+coefficient_matrix <- summary(logistic_model)$coefficients
+coefficient_table <- data.frame(
+  Term = rownames(coefficient_matrix),
+  Beta = coefficient_matrix[, "Estimate"],
+  `Standard error` = coefficient_matrix[, "Std. Error"],
+  `P value` = coefficient_matrix[, "Pr(>|z|)"],
+  OR = exp(coefficient_matrix[, "Estimate"]),
+  `OR 95% CI lower` = exp(
+    coefficient_matrix[, "Estimate"] -
+      1.96 * coefficient_matrix[, "Std. Error"]
+  ),
+  `OR 95% CI upper` = exp(
+    coefficient_matrix[, "Estimate"] +
+      1.96 * coefficient_matrix[, "Std. Error"]
+  ),
+  check.names = FALSE,
+  row.names = NULL
+)
+
+utils::write.csv(
+  coefficient_table,
+  file.path(output_dir, "logistic_regression_coefficients.csv"),
+  row.names = FALSE,
+  fileEncoding = "UTF-8"
+)
+knitr::kable(
+  coefficient_table,
+  digits = 4,
+  caption = "Logistic regression fitted only in 2015-2019"
+)
+```
+
+# Fixed integer score
+
+Following the article, each non-intercept regression coefficient is multiplied
+by 2 and rounded to the nearest integer. This creates one fixed point system.
+The same points are applied to patients in both cohorts.
+
+```{r create-fixed-score}
+round_nearest_integer <- function(x) {
+  sign(x) * floor(abs(x) + 0.5)
+}
+
+regression_betas <- coef(logistic_model)[-1]
+score_points <- setNames(
+  as.integer(round_nearest_integer(2 * regression_betas)),
+  names(regression_betas)
+)
+points_table <- data.frame(
+  Term = names(regression_betas),
+  Beta = as.numeric(regression_betas),
+  `Beta multiplied by 2` = 2 * as.numeric(regression_betas),
+  Points = as.integer(score_points),
+  check.names = FALSE,
+  row.names = NULL
+)
+score_formula <- reformulate(selected_variables)
+
+reference_rows <- lapply(names(logistic_model$xlevels), function(variable_name) {
+  data.frame(
+    Term = paste0(
+      variable_name, logistic_model$xlevels[[variable_name]][1], " (reference)"
+    ),
+    Beta = 0,
+    `Beta multiplied by 2` = 0,
+    Points = 0L,
+    check.names = FALSE
+  )
+})
+points_table_display <- if (length(reference_rows)) {
+  rbind(points_table, do.call(rbind, reference_rows))
+} else points_table
+
+calculate_score <- function(data) {
+  # Use a predictor-only formula so rows with an unknown outcome are not
+  # removed or shifted while assigning patient-level scores.
+  design_matrix <- model.matrix(score_formula, data = data)[, -1, drop = FALSE]
+  missing_columns <- setdiff(names(score_points), colnames(design_matrix))
+  if (length(missing_columns)) {
+    stop("Missing score columns: ", paste(missing_columns, collapse = ", "))
+  }
+  design_matrix <- design_matrix[, names(score_points), drop = FALSE]
+  as.integer(drop(design_matrix %*% score_points))
+}
+
+# Score every patient with all selected predictors, whether or not the outcome
+# is known. Missing predictors remain explicit and are never assigned zero.
+score_available <- complete.cases(
+  eligible[, selected_variables, drop = FALSE]
+)
+eligible$new_score <- NA_integer_
+eligible$new_score[score_available] <- calculate_score(
+  eligible[score_available, , drop = FALSE]
+)
+
+# Estimate the score-to-mortality equation only in the derivation cases used to
+# fit the logistic regression, then freeze it for both cohorts.
+derivation$new_score <- calculate_score(derivation)
+score_probability_model <- glm(
+  mortalidad_30d ~ new_score,
+  data = derivation,
+  family = binomial(link = "logit")
+)
+if (!score_probability_model$converged) {
+  stop("The score-to-mortality model did not converge.")
+}
+
+eligible$expected_mortality <- NA_real_
+eligible$expected_mortality[score_available] <- predict(
+  score_probability_model,
+  newdata = data.frame(new_score = eligible$new_score[score_available]),
+  type = "response"
+)
+
+utils::write.csv(
+  points_table_display,
+  file.path(output_dir, "new_score_points.csv"),
+  row.names = FALSE,
+  fileEncoding = "UTF-8"
+)
+knitr::kable(
+  points_table_display,
+  digits = c(0, 4, 4, 0),
+  caption = "Fixed point system derived in 2015-2019 and applied to both cohorts"
+)
+
+score_equation <- data.frame(
+  Component = c("Intercept", "Coefficient per score point"),
+  Estimate = unname(coef(score_probability_model))
+)
+knitr::kable(
+  score_equation,
+  digits = 5,
+  caption = "2015-2019 equation converting the fixed score to expected mortality"
+)
+```
+
+For total score `S`, expected mortality is calculated as
+
+\[
+P(\text{30-day death}) = \frac{1}{1 + \exp[-(a + bS)]},
+\]
+
+where `a` and `b` are estimated above using only 2015-2019.
+
+# Observed versus expected mortality
+
+The 2015-2019 comparison uses the complete derivation cases used for the full
+and stepwise regressions. The 2020-2025 comparison uses patients with a
+calculable score and a known 30-day outcome.
+
+```{r observed-expected-summary}
+derivation_evaluation <- eligible %>%
+  filter(
+    analysis_row_id %in% derivation$analysis_row_id,
+    !is.na(mortalidad_30d),
+    !is.na(expected_mortality)
+  )
+validation_evaluation <- eligible %>%
+  filter(
+    period == "Validation 2020-2025",
+    !is.na(mortalidad_30d),
+    !is.na(expected_mortality)
+  )
+
+summarise_observed_expected <- function(data, cohort_name) {
+  deaths <- sum(data$mortalidad_30d)
+  patients <- nrow(data)
+  observed_ci <- stats::binom.test(deaths, patients)$conf.int
+  data.frame(
+    Cohort = cohort_name,
+    Patients = patients,
+    Deaths = deaths,
+    `Observed mortality (%)` = 100 * deaths / patients,
+    `Observed 95% CI lower` = 100 * observed_ci[1],
+    `Observed 95% CI upper` = 100 * observed_ci[2],
+    `Expected deaths` = sum(data$expected_mortality),
+    `Expected mortality (%)` = 100 * mean(data$expected_mortality),
+    `Observed/expected deaths` = deaths / sum(data$expected_mortality),
+    check.names = FALSE
+  )
+}
+
+observed_expected_summary <- rbind(
+  summarise_observed_expected(derivation_evaluation, "2015-2019"),
+  summarise_observed_expected(validation_evaluation, "2020-2025")
+)
+
+utils::write.csv(
+  observed_expected_summary,
+  file.path(output_dir, "observed_vs_expected_mortality.csv"),
+  row.names = FALSE,
+  fileEncoding = "UTF-8"
+)
+knitr::kable(
+  observed_expected_summary,
+  digits = c(0, 0, 0, 2, 2, 2, 1, 2, 3),
+  caption = "Observed and expected 30-day mortality using the same fixed score"
+)
+```
+
+```{r observed-expected-plot, echo=FALSE, fig.cap="Observed and expected mortality in the derivation and temporal-validation cohorts."}
+overall_plot_data <- rbind(
+  data.frame(
+    Cohort = observed_expected_summary$Cohort,
+    Mortality = "Expected",
+    Percent = observed_expected_summary$`Expected mortality (%)`,
+    lower = NA_real_, upper = NA_real_
+  ),
+  data.frame(
+    Cohort = observed_expected_summary$Cohort,
+    Mortality = "Observed",
+    Percent = observed_expected_summary$`Observed mortality (%)`,
+    lower = observed_expected_summary$`Observed 95% CI lower`,
+    upper = observed_expected_summary$`Observed 95% CI upper`
+  )
+)
+overall_plot_data$Mortality <- factor(
+  overall_plot_data$Mortality, levels = c("Expected", "Observed")
+)
+
+dodge <- position_dodge(width = 0.78)
+observed_expected_plot <- ggplot(
+  overall_plot_data,
+  aes(x = Cohort, y = Percent, fill = Mortality)
+) +
+  geom_col(position = dodge, width = 0.70, colour = "white") +
+  geom_errorbar(
+    aes(ymin = lower, ymax = upper),
+    position = dodge, width = 0.16, na.rm = TRUE
+  ) +
+  geom_text(
+    aes(label = sprintf("%.1f%%", Percent)),
+    position = dodge, vjust = -0.55, size = 4
+  ) +
+  scale_fill_manual(values = c("Expected" = "#756BB1", "Observed" = "#E6550D")) +
+  scale_y_continuous(
+    limits = c(0, max(overall_plot_data$upper, overall_plot_data$Percent,
+                      na.rm = TRUE) * 1.22),
+    expand = expansion(mult = c(0, 0.02))
+  ) +
+  labs(
+    title = "Observed versus expected 30-day mortality",
+    subtitle = "One score developed in 2015-2019 and applied unchanged to both cohorts",
+    x = NULL, y = "Mortality (%)", fill = NULL
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(panel.grid.minor = element_blank(), legend.position = "top")
+
+observed_expected_plot
+ggsave(
+  file.path(output_dir, "observed_vs_expected_mortality.png"),
+  observed_expected_plot, width = 9, height = 6, dpi = 180
+)
+```
+
+## Observed and predicted mortality by risk group
+
+The fixed new score is divided using the same point thresholds as the published
+RETRASCORE presentation. These labels describe score bands; the underlying
+points and expected mortality equation remain those developed exclusively in
+2015-2019 for the new model.
+
+```{r mortality-by-risk-group}
+evaluation_data <- bind_rows(
+  derivation_evaluation %>% mutate(Cohort = "2015-2019"),
+  validation_evaluation %>% mutate(Cohort = "2020-2025")
+)
+
+risk_group_levels <- c(
+  "Very low (<5)",
+  "Low (5-6)",
+  "Medium (7-8)",
+  "High (9-11)",
+  "Very high (12-13)",
+  "Extreme (14+)"
+)
+evaluation_data$risk_group <- cut(
+  evaluation_data$new_score,
+  breaks = c(-Inf, 4, 6, 8, 11, 13, Inf),
+  labels = risk_group_levels,
+  ordered_result = TRUE
+)
+
+mortality_by_risk_group <- evaluation_data %>%
+  group_by(Cohort, risk_group, .drop = FALSE) %>%
+  summarise(
+    Patients = n(),
+    Deaths = sum(mortalidad_30d),
+    `Observed mortality (%)` = 100 * mean(mortalidad_30d),
+    `Predicted mortality (%)` = 100 * mean(expected_mortality),
+    .groups = "drop"
+  ) %>%
+  rowwise() %>%
+  mutate(
+    `95% CI lower` = if (Patients > 0) {
+      100 * stats::binom.test(Deaths, Patients)$conf.int[1]
+    } else NA_real_,
+    `95% CI upper` = if (Patients > 0) {
+      100 * stats::binom.test(Deaths, Patients)$conf.int[2]
+    } else NA_real_
+  ) %>%
+  ungroup() %>%
+  rename(period = Cohort)
+
+utils::write.csv(
+  mortality_by_risk_group,
+  file.path(output_dir, "observed_vs_predicted_by_risk_group.csv"),
+  row.names = FALSE,
+  fileEncoding = "UTF-8"
+)
+
+knitr::kable(
+  mortality_by_risk_group,
+  digits = c(0, 0, 0, 0, 2, 2, 2, 2),
+  caption = "Observed and predicted mortality by new-score risk group"
+)
+```
+
+```{r risk-group-plot, echo=FALSE, fig.cap="Observed and predicted 30-day mortality by new-score risk group."}
+risk_group_plot_data <- rbind(
+  data.frame(
+    period = mortality_by_risk_group$period,
+    risk_group = mortality_by_risk_group$risk_group,
+    Patients = mortality_by_risk_group$Patients,
+    Mortality = "Predicted",
+    Percent = mortality_by_risk_group$`Predicted mortality (%)`,
+    lower = NA_real_, upper = NA_real_
+  ),
+  data.frame(
+    period = mortality_by_risk_group$period,
+    risk_group = mortality_by_risk_group$risk_group,
+    Patients = mortality_by_risk_group$Patients,
+    Mortality = "Observed",
+    Percent = mortality_by_risk_group$`Observed mortality (%)`,
+    lower = mortality_by_risk_group$`95% CI lower`,
+    upper = mortality_by_risk_group$`95% CI upper`
+  )
+)
+risk_group_plot_data$Mortality <- factor(
+  risk_group_plot_data$Mortality,
+  levels = c("Predicted", "Observed")
+)
+
+risk_dodge <- position_dodge(width = 0.82)
+risk_group_plot <- ggplot(
+  risk_group_plot_data,
+  aes(x = risk_group, y = Percent, fill = Mortality)
+) +
+  geom_col(position = risk_dodge, width = 0.76, colour = "white") +
+  geom_errorbar(
+    aes(ymin = lower, ymax = upper),
+    position = risk_dodge,
+    width = 0.18,
+    linewidth = 0.45,
+    na.rm = TRUE
+  ) +
+  geom_text(
+    aes(label = sprintf("%.1f%%", Percent)),
+    position = risk_dodge,
+    vjust = -0.45,
+    size = 3
+  ) +
+  facet_wrap(~ period) +
+  scale_fill_manual(
+    values = c("Predicted" = "#756BB1", "Observed" = "#E6550D")
+  ) +
+  scale_y_continuous(
+    limits = c(0, 106),
+    breaks = seq(0, 100, 20),
+    expand = expansion(mult = c(0, 0.02))
+  ) +
+  labs(
+    title = "Observed and predicted mortality by risk group",
+    subtitle = "The same 2015-2019 point system and mortality equation are used in both cohorts",
+    x = "New-score risk group",
+    y = "30-day mortality (%)",
+    fill = NULL
+  ) +
+  theme_minimal(base_size = 11) +
+  theme(
+    panel.grid.minor = element_blank(),
+    axis.text.x = element_text(angle = 25, hjust = 1),
+    legend.position = "top"
+  )
+
+risk_group_plot
+ggsave(
+  file.path(output_dir, "observed_vs_predicted_by_risk_group.png"),
+  risk_group_plot, width = 13, height = 7, dpi = 180
+)
+```
+
+## Observed and expected mortality by exact score
+
+```{r mortality-by-score}
+
+mortality_by_score <- evaluation_data %>%
+  group_by(Cohort, new_score) %>%
+  summarise(
+    Patients = n(),
+    Deaths = sum(mortalidad_30d),
+    `Observed mortality (%)` = 100 * mean(mortalidad_30d),
+    `Expected mortality (%)` = 100 * mean(expected_mortality),
+    .groups = "drop"
+  )
+
+utils::write.csv(
+  mortality_by_score,
+  file.path(output_dir, "observed_vs_expected_by_score.csv"),
+  row.names = FALSE,
+  fileEncoding = "UTF-8"
+)
+
+score_plot_data <- rbind(
+  data.frame(
+    Cohort = mortality_by_score$Cohort,
+    new_score = mortality_by_score$new_score,
+    Patients = mortality_by_score$Patients,
+    Mortality = "Expected",
+    Percent = mortality_by_score$`Expected mortality (%)`
+  ),
+  data.frame(
+    Cohort = mortality_by_score$Cohort,
+    new_score = mortality_by_score$new_score,
+    Patients = mortality_by_score$Patients,
+    Mortality = "Observed",
+    Percent = mortality_by_score$`Observed mortality (%)`
+  )
+)
+
+mortality_score_plot <- ggplot(
+  score_plot_data,
+  aes(x = new_score, y = Percent, colour = Mortality)
+) +
+  geom_line(
+    data = subset(score_plot_data, Mortality == "Expected"),
+    linewidth = 1
+  ) +
+  geom_point(
+    data = subset(score_plot_data, Mortality == "Observed"),
+    aes(size = Patients), alpha = 0.80
+  ) +
+  facet_wrap(~ Cohort) +
+  scale_colour_manual(values = c("Expected" = "#756BB1", "Observed" = "#E6550D")) +
+  scale_y_continuous(limits = c(0, 100), breaks = seq(0, 100, 20)) +
+  labs(
+    title = "Observed and expected mortality by the fixed score",
+    x = "New score (points)", y = "30-day mortality (%)",
+    colour = NULL, size = "Patients"
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(panel.grid.minor = element_blank(), legend.position = "top")
+
+mortality_score_plot
+ggsave(
+  file.path(output_dir, "observed_vs_expected_by_score.png"),
+  mortality_score_plot, width = 11, height = 6.5, dpi = 180
+)
+```
+
+# Score performance
+
+```{r score-performance}
+evaluate_score <- function(data, cohort_name) {
+  outcome <- data$mortalidad_30d
+  probability <- data$expected_mortality
+  roc_object <- pROC::roc(
+    outcome, probability, levels = c(0, 1), direction = "<", quiet = TRUE
+  )
+  auc_ci <- as.numeric(pROC::ci.auc(roc_object, method = "delong"))
+  lp <- qlogis(pmin(pmax(probability, 1e-12), 1 - 1e-12))
+  intercept_model <- glm(outcome ~ 1, offset = lp, family = binomial())
+  slope_model <- glm(outcome ~ lp, family = binomial())
+  data.frame(
+    Cohort = cohort_name,
+    N = length(outcome),
+    AUROC = as.numeric(pROC::auc(roc_object)),
+    `AUROC 95% CI lower` = auc_ci[1],
+    `AUROC 95% CI upper` = auc_ci[3],
+    Brier = mean((outcome - probability)^2),
+    `Calibration intercept` = unname(coef(intercept_model)[1]),
+    `Calibration slope` = unname(coef(slope_model)[2]),
+    check.names = FALSE
+  )
+}
+
+score_performance <- rbind(
+  evaluate_score(derivation_evaluation, "2015-2019"),
+  evaluate_score(validation_evaluation, "2020-2025")
+)
+utils::write.csv(
+  score_performance,
+  file.path(output_dir, "model_validation_metrics.csv"),
+  row.names = FALSE,
+  fileEncoding = "UTF-8"
+)
+
+performance_display <- score_performance
+performance_display$`AUROC (95% CI)` <- sprintf(
+  "%.3f (%.3f-%.3f)", performance_display$AUROC,
+  performance_display$`AUROC 95% CI lower`,
+  performance_display$`AUROC 95% CI upper`
+)
+performance_display <- performance_display[, c(
+  "Cohort", "N", "AUROC (95% CI)", "Brier",
+  "Calibration intercept", "Calibration slope"
+)]
+knitr::kable(
+  performance_display,
+  digits = c(0, 0, 0, 3, 3, 3),
+  caption = "Performance of the fixed integer score in both cohorts"
+)
+```
+
+# Patient-level scores and saved model
+
+```{r save-results}
+identifier_candidates <- c("id_fila", "historia", "registro", "hospital")
+identifier_variables <- intersect(identifier_candidates, names(eligible))
+patient_predictions <- eligible %>%
+  select(
+    analysis_row_id, all_of(identifier_variables), ano_trauma,
+    cohort = period, mortalidad_30d, new_score, expected_mortality
+  ) %>%
+  mutate(score_available = !is.na(new_score), .after = mortalidad_30d)
+
+utils::write.csv(
+  patient_predictions,
+  file.path(output_dir, "patient_scores_and_predictions.csv"),
+  row.names = FALSE,
+  na = "",
+  fileEncoding = "UTF-8"
+)
+
+model_bundle <- list(
+  analysis = paste(
+    paste0("Full ", length(candidate_variables), "-variable logistic regression"),
+    "followed by bidirectional",
+    "AIC stepwise selection in 2015-2019"
+  ),
+  derivation_years = 2015:2019,
+  validation_years = 2020:2025,
+  selection_method = "MASS::stepAIC",
+  selection_direction = "both",
+  selection_criterion = "AIC",
+  candidate_variables = candidate_variables,
+  selected_variables = selected_variables,
+  full_model_formula = full_model_formula,
+  full_model = full_model,
+  stepwise_selection_path = stepwise_path,
+  logistic_formula = model_formula,
+  logistic_model = logistic_model,
+  integer_points = score_points,
+  score_probability_model = score_probability_model
+)
+saveRDS(
+  model_bundle,
+  file.path(output_dir, "new_stepwise_logistic_model.rds")
+)
+
+saved_files <- data.frame(
+  File = c(
+    "stepwise_selection_path.csv",
+    "stepwise_variable_inclusion.csv",
+    "logistic_regression_coefficients.csv",
+    "new_score_points.csv",
+    "observed_vs_expected_mortality.csv",
+    "observed_vs_predicted_by_risk_group.csv",
+    "observed_vs_expected_by_score.csv",
+    "model_validation_metrics.csv",
+    "patient_scores_and_predictions.csv",
+    "new_stepwise_logistic_model.rds",
+    "stepwise_variable_inclusion.png",
+    "observed_vs_expected_mortality.png",
+    "observed_vs_predicted_by_risk_group.png",
+    "observed_vs_expected_by_score.png"
+  ),
+  Purpose = c(
+    paste0(
+      "Bidirectional AIC selection path from the full ",
+      length(candidate_variables), "-variable model"
+    ),
+    "Variables included at each step and the corresponding model AIC",
+    "Stepwise-selected logistic regression fitted in 2015-2019",
+    "Fixed article-style point table",
+    "Overall observed and expected mortality",
+    "Observed and predicted mortality by six risk groups",
+    "Observed and expected mortality for each score",
+    "Discrimination and calibration in both cohorts",
+    "Patient-level fixed scores and expected mortality",
+    "Reusable fitted model, points, and metadata",
+    "Variable-inclusion heatmap for the bidirectional AIC path",
+    "Overall mortality comparison plot",
+    "Risk-group mortality comparison plot",
+    "Mortality comparison by score"
+  )
+)
+knitr::kable(saved_files, caption = "Files saved by this report")
+```
+
+# Reproducibility notes
+
+- Missing candidate values are handled by complete-case analysis; no value is
+  imputed and no missing predictor is interpreted as zero.
+- All `r length(candidate_variables)` explicitly listed predictor variables
+  enter the initial full logistic model. The
+  bidirectional `stepAIC()` search removes or re-adds complete model terms,
+  including categorical predictors as whole terms.
+- All candidate models are fitted to the same complete-case derivation sample,
+  making their AIC values comparable. The 2020-2025 results do not influence
+  variable selection.
+- Integer points are based on the stepwise-selected logistic-regression
+  coefficients: points = round(2 x beta).
+- The selected logistic regression is fitted in 2015-2019. Its fixed point
+  table and score-to-probability equation are applied unchanged to both
+  cohorts.
+- No model coefficient, point value, or probability equation is re-estimated
+  with the 2020-2025 cohort.
+- Post-selection confidence intervals and P values do not account for the
+  uncertainty introduced by stepwise selection and should be interpreted
+  descriptively. Stepwise selection can also be unstable under resampling.
+
+# Source
+
+Stepwise procedure: Datanovia. [*Stepwise Logistic Regression in R: stepAIC
+Variable Selection*](https://www.datanovia.com/learn/machine-learning/classification/stepwise-logistic-regression).
+The implementation uses a full binomial `glm` followed by
+`MASS::stepAIC(..., direction = "both")`.
+
+Servia L, et al. *Development of a new score for early mortality prediction in
+trauma ICU patients: RETRASCORE*. Critical Care. 2021;25:420.
+doi:10.1186/s13054-021-03845-6.
+
+```{r session-info}
+sessionInfo()
+```

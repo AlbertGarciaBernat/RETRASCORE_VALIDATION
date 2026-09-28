@@ -1,0 +1,1062 @@
+---
+title: "RETRASCORE: torax aislado frente a torax con otra lesion"
+output:
+  html_document:
+    toc: true
+    toc_depth: 2
+date: "2026-09-21"
+---
+
+```{r setup, include=FALSE}
+library(dplyr)
+
+knitr::opts_chunk$set(
+  echo = TRUE,
+  message = FALSE,
+  warning = FALSE
+)
+```
+
+# Objetivo
+
+Crear dos grupos de pacientes con lesion toracica grave y repetir la estructura
+de la Tabla 2 del articulo RETRASCORE, mostrando en porcentaje las veinte
+variables candidatas:
+
+1. **Torax solo:** `mais_torax = 1` y las otras cinco regiones MAIS son 0.
+2. **Torax + otra lesion:** `mais_torax = 1` y al menos otra region MAIS es 1.
+
+En el archivo preprocesado, una variable `mais_*` vale 1 cuando el AIS maximo
+de esa region es mayor o igual a 3. Esta definicion coincide con la nota de la
+Tabla 2 del articulo: MAIS = AIS >=3.
+
+# Carga de datos
+
+```{r cargar-datos}
+archivo_cohorte <- "C:/Users/user/OneDrive - udl.cat/Desktop/RETRASCORE_VALIDATION/cohorte_retrascore.rds"
+
+if (!file.exists(archivo_cohorte)) {
+  stop(
+    "cohorte_retrascore.rds was not found. ",
+    "Run retrascore_validation_preprocessing.Rmd first."
+  )
+}
+
+cohorte_retrascore <- readRDS(archivo_cohorte)
+
+columnas_mais <- c(
+  "mais_cabeza", "mais_torax", "mais_abdomen",
+  "mais_ext_superior", "mais_ext_inferior", "mais_externo"
+)
+
+if (!all(columnas_mais %in% names(cohorte_retrascore))) {
+  stop("Faltan una o mas columnas MAIS en cohorte_retrascore.rds.")
+}
+```
+
+# Creacion de los grupos
+
+No se eliminan registros de la cohorte original. Se crea un nuevo data frame
+que contiene pacientes con `mais_torax = 1` y las seis variables MAIS
+disponibles. No se imputan valores ausentes.
+
+```{r crear-grupos}
+otras_regiones_mais <- setdiff(columnas_mais, "mais_torax")
+mais_completo <- complete.cases(cohorte_retrascore[columnas_mais])
+
+cohorte_torax <- cohorte_retrascore[
+  mais_completo & cohorte_retrascore$mais_torax == 1,
+]
+
+cohorte_torax$n_otras_regiones_mais <- rowSums(
+  cohorte_torax[otras_regiones_mais] == 1
+)
+
+cohorte_torax$grupo_torax <- factor(
+  ifelse(
+    cohorte_torax$n_otras_regiones_mais == 0,
+    "Torax solo",
+    "Torax + otra lesion"
+  ),
+  levels = c("Torax solo", "Torax + otra lesion")
+)
+
+recuento_grupos <- data.frame(
+  grupo = levels(cohorte_torax$grupo_torax),
+  n = as.integer(table(cohorte_torax$grupo_torax)),
+  porcentaje = round(
+    100 * as.numeric(prop.table(table(cohorte_torax$grupo_torax))),
+    1
+  )
+)
+
+knitr::kable(recuento_grupos, row.names = FALSE)
+```
+
+# Tabla 2 por patron de lesion toracica
+
+Los porcentajes se calculan entre los pacientes con dato disponible para cada
+variable. El valor p compara los dos grupos mediante chi-cuadrado; se utiliza
+la prueba exacta de Fisher cuando alguna frecuencia esperada es menor de 5.
+Las filas MAIS que definen los grupos no se someten a contraste estadistico.
+
+```{r funciones-tabla, include=FALSE}
+porcentaje_valor <- function(variable, valor, grupo) {
+  datos <- cohorte_torax[cohorte_torax$grupo_torax == grupo, variable]
+  disponibles <- !is.na(datos)
+
+  if (sum(disponibles) == 0) {
+    return(NA_character_)
+  }
+
+  sprintf("%.1f", 100 * mean(datos[disponibles] == valor))
+}
+
+formatear_p <- function(p) {
+  if (is.na(p)) return(NA_character_)
+  if (p < 0.001) return("<0.001")
+  sprintf("%.3f", p)
+}
+
+p_variable <- function(variable) {
+  x <- cohorte_torax[[variable]]
+  completos <- !is.na(x) & !is.na(cohorte_torax$grupo_torax)
+  tabla <- table(cohorte_torax$grupo_torax[completos], x[completos])
+
+  if (nrow(tabla) < 2 || ncol(tabla) < 2) {
+    return("-")
+  }
+
+  prueba_chi <- suppressWarnings(chisq.test(tabla, correct = FALSE))
+
+  if (any(prueba_chi$expected < 5)) {
+    formatear_p(fisher.test(tabla)$p.value)
+  } else {
+    formatear_p(prueba_chi$p.value)
+  }
+}
+
+fila_categoria <- function(etiqueta, variable) {
+  data.frame(
+    Variable = etiqueta,
+    `Torax solo (%)` = "",
+    `Torax + otra lesion (%)` = "",
+    `Valor p` = p_variable(variable),
+    check.names = FALSE
+  )
+}
+
+fila_nivel <- function(etiqueta, variable, valor, p = "") {
+  data.frame(
+    Variable = etiqueta,
+    `Torax solo (%)` = porcentaje_valor(variable, valor, "Torax solo"),
+    `Torax + otra lesion (%)` = porcentaje_valor(
+      variable,
+      valor,
+      "Torax + otra lesion"
+    ),
+    `Valor p` = p,
+    check.names = FALSE
+  )
+}
+
+fila_binaria <- function(etiqueta, variable, valor = 1, contrastar = TRUE) {
+  fila_nivel(
+    etiqueta,
+    variable,
+    valor,
+    if (contrastar) p_variable(variable) else "-"
+  )
+}
+```
+
+```{r tabla-2, echo=FALSE}
+tabla_2_torax <- rbind(
+  fila_categoria("Edad (grupos)", "edad_categoria"),
+  fila_nivel("  <50", "edad_categoria", "<50"),
+  fila_nivel("  50-65", "edad_categoria", "50-65"),
+  fila_nivel("  66-75", "edad_categoria", "66-75"),
+  fila_nivel("  >75", "edad_categoria", ">75"),
+  fila_binaria("Sexo masculino", "genero_masculino"),
+  fila_binaria("PRECOAG", "precoag"),
+  fila_binaria(
+    "Atencion prehospitalaria medica",
+    "atencion_prehospitalaria_medica"
+  ),
+  fila_binaria("Intubacion prehospitalaria", "iot_prehospitalaria"),
+  fila_binaria("Mecanismo de alto riesgo", "mecanismo_alto_riesgo"),
+  fila_binaria("Mecanismo penetrante", "trauma_penetrante"),
+  fila_categoria("Pupilas", "pupilas"),
+  fila_nivel("  Normales", "pupilas", "normal"),
+  fila_nivel(
+    "  Midriasis unilateral",
+    "pupilas",
+    "midriasis unilateral"
+  ),
+  fila_nivel(
+    "  Midriasis bilateral",
+    "pupilas",
+    "midriasis bilateral"
+  ),
+  fila_binaria("GCS <=8", "gcs_menor_igual_8"),
+  fila_binaria("MAIS cabeza", "mais_cabeza", contrastar = FALSE),
+  fila_binaria("MAIS torax", "mais_torax", contrastar = FALSE),
+  fila_binaria("MAIS abdomen", "mais_abdomen", contrastar = FALSE),
+  fila_binaria(
+    "MAIS extremidad superior",
+    "mais_ext_superior",
+    contrastar = FALSE
+  ),
+  fila_binaria(
+    "MAIS extremidad inferior",
+    "mais_ext_inferior",
+    contrastar = FALSE
+  ),
+  fila_binaria("MAIS externo", "mais_externo", contrastar = FALSE),
+  fila_binaria("Fallo hemodinamico", "fallo_hemodinamico"),
+  fila_binaria("Fallo respiratorio", "fallo_respiratorio"),
+  fila_binaria("Coagulopatia", "coagulopatia_24h"),
+  fila_binaria("Ventilacion mecanica", "ventilacion_mecanica"),
+  fila_binaria("Hemorragia masiva", "hemorragia_masiva")
+)
+
+n_solo <- sum(cohorte_torax$grupo_torax == "Torax solo")
+n_multiple <- sum(cohorte_torax$grupo_torax == "Torax + otra lesion")
+
+names(tabla_2_torax)[2:3] <- c(
+  sprintf("Torax solo (N=%d), %%", n_solo),
+  sprintf("Torax + otra lesion (N=%d), %%", n_multiple)
+)
+
+knitr::kable(
+  tabla_2_torax,
+  align = c("l", "r", "r", "r"),
+  row.names = FALSE,
+  caption = paste(
+    "Tabla 2. Variables RETRASCORE segun patron de lesion toracica.",
+    "Valores expresados como porcentajes."
+  )
+)
+```
+
+PRECOAG: tratamiento previo con antiagregantes o anticoagulantes. GCS: Glasgow
+Coma Score. MAIS: lesion regional con AIS mayor o igual a 3. Los guiones de las
+filas MAIS indican que no se calcula un valor p porque esas variables forman
+parte de la definicion de los grupos.
+
+# Tabla 2: torax, extremidad superior y resto de lesiones
+
+Se repite la Tabla 2 conservando tres grupos mutuamente excluyentes:
+
+1. **Torax solo:** no existe otra region con MAIS >=3.
+2. **Torax + extremidad superior:** la extremidad superior es la unica region
+   adicional con MAIS >=3.
+3. **Resto de lesiones:** los demas patrones con MAIS toracico >=3, incluida la
+   afectacion de extremidad superior cuando se acompana de otra region.
+
+```{r crear-grupos-torax-extremidad}
+cohorte_torax$grupo_torax_extremidad <- factor(
+  ifelse(
+    cohorte_torax$n_otras_regiones_mais == 0,
+    "Torax solo",
+    ifelse(
+      cohorte_torax$n_otras_regiones_mais == 1 &
+        cohorte_torax$mais_ext_superior == 1,
+      "Torax + extremidad superior",
+      "Resto de lesiones"
+    )
+  ),
+  levels = c(
+    "Torax solo",
+    "Torax + extremidad superior",
+    "Resto de lesiones"
+  )
+)
+
+recuento_grupos_extremidad <- data.frame(
+  grupo = levels(cohorte_torax$grupo_torax_extremidad),
+  n = as.integer(table(cohorte_torax$grupo_torax_extremidad)),
+  porcentaje = round(
+    100 * as.numeric(
+      prop.table(table(cohorte_torax$grupo_torax_extremidad))
+    ),
+    1
+  )
+)
+
+knitr::kable(recuento_grupos_extremidad, row.names = FALSE)
+```
+
+```{r funciones-tabla-torax-extremidad, include=FALSE}
+porcentaje_valor_extremidad <- function(variable, valor, grupo) {
+  datos <- cohorte_torax[
+    cohorte_torax$grupo_torax_extremidad == grupo,
+    variable
+  ]
+  disponibles <- !is.na(datos)
+
+  if (sum(disponibles) == 0) {
+    return(NA_character_)
+  }
+
+  sprintf("%.1f", 100 * mean(datos[disponibles] == valor))
+}
+
+p_variable_extremidad <- function(variable) {
+  x <- cohorte_torax[[variable]]
+  completos <- !is.na(x) &
+    !is.na(cohorte_torax$grupo_torax_extremidad)
+  tabla <- table(
+    cohorte_torax$grupo_torax_extremidad[completos],
+    x[completos]
+  )
+
+  if (nrow(tabla) < 2 || ncol(tabla) < 2) {
+    return("-")
+  }
+
+  prueba_chi <- suppressWarnings(chisq.test(tabla, correct = FALSE))
+
+  if (any(prueba_chi$expected < 5)) {
+    if (all(dim(tabla) == c(2, 2))) {
+      p_fisher <- fisher.test(tabla)$p.value
+    } else {
+      set.seed(20260921)
+      p_fisher <- fisher.test(
+        tabla,
+        simulate.p.value = TRUE,
+        B = 10000
+      )$p.value
+    }
+    formatear_p(p_fisher)
+  } else {
+    formatear_p(prueba_chi$p.value)
+  }
+}
+
+fila_categoria_extremidad <- function(etiqueta, variable) {
+  data.frame(
+    Variable = etiqueta,
+    `Torax solo (%)` = "",
+    `Torax + extremidad superior (%)` = "",
+    `Resto de lesiones (%)` = "",
+    `Valor p` = p_variable_extremidad(variable),
+    check.names = FALSE
+  )
+}
+
+fila_nivel_extremidad <- function(etiqueta, variable, valor, p = "") {
+  data.frame(
+    Variable = etiqueta,
+    `Torax solo (%)` = porcentaje_valor_extremidad(
+      variable,
+      valor,
+      "Torax solo"
+    ),
+    `Torax + extremidad superior (%)` = porcentaje_valor_extremidad(
+      variable,
+      valor,
+      "Torax + extremidad superior"
+    ),
+    `Resto de lesiones (%)` = porcentaje_valor_extremidad(
+      variable,
+      valor,
+      "Resto de lesiones"
+    ),
+    `Valor p` = p,
+    check.names = FALSE
+  )
+}
+
+fila_binaria_extremidad <- function(
+  etiqueta,
+  variable,
+  valor = 1,
+  contrastar = TRUE
+) {
+  fila_nivel_extremidad(
+    etiqueta,
+    variable,
+    valor,
+    if (contrastar) p_variable_extremidad(variable) else "-"
+  )
+}
+```
+
+```{r tabla-2-torax-extremidad, echo=FALSE}
+tabla_2_torax_extremidad <- rbind(
+  fila_categoria_extremidad("Edad (grupos)", "edad_categoria"),
+  fila_nivel_extremidad("  <50", "edad_categoria", "<50"),
+  fila_nivel_extremidad("  50-65", "edad_categoria", "50-65"),
+  fila_nivel_extremidad("  66-75", "edad_categoria", "66-75"),
+  fila_nivel_extremidad("  >75", "edad_categoria", ">75"),
+  fila_binaria_extremidad("Sexo masculino", "genero_masculino"),
+  fila_binaria_extremidad("PRECOAG", "precoag"),
+  fila_binaria_extremidad(
+    "Atencion prehospitalaria medica",
+    "atencion_prehospitalaria_medica"
+  ),
+  fila_binaria_extremidad(
+    "Intubacion prehospitalaria",
+    "iot_prehospitalaria"
+  ),
+  fila_binaria_extremidad(
+    "Mecanismo de alto riesgo",
+    "mecanismo_alto_riesgo"
+  ),
+  fila_binaria_extremidad("Mecanismo penetrante", "trauma_penetrante"),
+  fila_categoria_extremidad("Pupilas", "pupilas"),
+  fila_nivel_extremidad("  Normales", "pupilas", "normal"),
+  fila_nivel_extremidad(
+    "  Midriasis unilateral",
+    "pupilas",
+    "midriasis unilateral"
+  ),
+  fila_nivel_extremidad(
+    "  Midriasis bilateral",
+    "pupilas",
+    "midriasis bilateral"
+  ),
+  fila_binaria_extremidad("GCS <=8", "gcs_menor_igual_8"),
+  fila_binaria_extremidad(
+    "MAIS cabeza",
+    "mais_cabeza",
+    contrastar = FALSE
+  ),
+  fila_binaria_extremidad(
+    "MAIS torax",
+    "mais_torax",
+    contrastar = FALSE
+  ),
+  fila_binaria_extremidad(
+    "MAIS abdomen",
+    "mais_abdomen",
+    contrastar = FALSE
+  ),
+  fila_binaria_extremidad(
+    "MAIS extremidad superior",
+    "mais_ext_superior",
+    contrastar = FALSE
+  ),
+  fila_binaria_extremidad(
+    "MAIS extremidad inferior",
+    "mais_ext_inferior",
+    contrastar = FALSE
+  ),
+  fila_binaria_extremidad(
+    "MAIS externo",
+    "mais_externo",
+    contrastar = FALSE
+  ),
+  fila_binaria_extremidad("Fallo hemodinamico", "fallo_hemodinamico"),
+  fila_binaria_extremidad("Fallo respiratorio", "fallo_respiratorio"),
+  fila_binaria_extremidad("Coagulopatia", "coagulopatia_24h"),
+  fila_binaria_extremidad("Ventilacion mecanica", "ventilacion_mecanica"),
+  fila_binaria_extremidad("Hemorragia masiva", "hemorragia_masiva"),
+  fila_binaria_extremidad("Mortalidad a 30 dias", "mortalidad_30d")
+)
+
+n_grupos_extremidad <- table(cohorte_torax$grupo_torax_extremidad)
+
+names(tabla_2_torax_extremidad)[2:4] <- c(
+  sprintf("Torax solo (N=%d), %%", n_grupos_extremidad["Torax solo"]),
+  sprintf(
+    "Torax + extremidad superior (N=%d), %%",
+    n_grupos_extremidad["Torax + extremidad superior"]
+  ),
+  sprintf(
+    "Resto de lesiones (N=%d), %%",
+    n_grupos_extremidad["Resto de lesiones"]
+  )
+)
+
+knitr::kable(
+  tabla_2_torax_extremidad,
+  align = c("l", "r", "r", "r", "r"),
+  row.names = FALSE,
+  caption = paste(
+    "Tabla 2. Variables RETRASCORE: torax solo, torax con extremidad",
+    "superior y resto de lesiones. Valores expresados como porcentajes."
+  )
+)
+```
+
+El valor p es el contraste global entre los tres grupos. Los porcentajes se
+calculan entre los pacientes con dato disponible para cada variable. Las filas
+MAIS no se contrastan porque se utilizan para definir los grupos.
+
+# Valores ausentes
+
+Esta tabla permite comprobar los denominadores que cambian por datos ausentes.
+
+```{r tabla-ausentes, echo=FALSE}
+variables_tabla_2 <- c(
+  "edad_categoria", "genero_masculino", "precoag",
+  "atencion_prehospitalaria_medica", "iot_prehospitalaria",
+  "mecanismo_alto_riesgo", "trauma_penetrante", "pupilas",
+  "gcs_menor_igual_8", columnas_mais, "fallo_hemodinamico",
+  "fallo_respiratorio", "coagulopatia_24h", "ventilacion_mecanica",
+  "hemorragia_masiva"
+)
+
+ausentes_por_grupo <- do.call(
+  rbind,
+  lapply(variables_tabla_2, function(variable) {
+    data.frame(
+      variable = variable,
+      `Torax solo` = sum(
+        is.na(cohorte_torax[
+          cohorte_torax$grupo_torax == "Torax solo",
+          variable
+        ])
+      ),
+      `Torax + otra lesion` = sum(
+        is.na(cohorte_torax[
+          cohorte_torax$grupo_torax == "Torax + otra lesion",
+          variable
+        ])
+      ),
+      check.names = FALSE
+    )
+  })
+)
+
+ausentes_por_grupo <- ausentes_por_grupo[
+  rowSums(ausentes_por_grupo[, -1]) > 0,
+]
+
+if (nrow(ausentes_por_grupo) == 0) {
+  cat("No hay valores ausentes en las variables de la Tabla 2.\n")
+} else {
+  knitr::kable(ausentes_por_grupo, row.names = FALSE)
+}
+```
+
+# Fuente
+
+La seleccion y el orden de las variables reproducen la Tabla 2 de
+`s13054-021-03845-6.pdf`. La tabla original compara supervivientes y no
+supervivientes; esta version sustituye esas columnas por los dos patrones de
+lesion toracica definidos mediante las variables MAIS.
+
+# Clustering exploratorio
+
+El clustering se realiza sin las variables MAIS utilizadas para crear
+`grupo_torax` y sin variables de resultado. De esta forma, los grupos
+anatomicos no se incorporan de manera circular y la mortalidad puede utilizarse
+despues para describir el pronostico de los clusters.
+
+Se incluyen las variables clinicas de la Tabla 2 restantes. Como son binarias
+o categoricas, se construyen indicadores y se aplica CLARA con distancia
+Manhattan. Los indicadores de edad y pupilas se ponderan para que cada variable
+original tenga un peso maximo equivalente a una variable binaria.
+
+```{r preparar-clustering}
+variables_cluster <- c(
+  "edad_categoria", "genero_masculino", "precoag",
+  "atencion_prehospitalaria_medica", "iot_prehospitalaria",
+  "mecanismo_alto_riesgo", "trauma_penetrante", "pupilas",
+  "gcs_menor_igual_8", "fallo_hemodinamico", "fallo_respiratorio",
+  "coagulopatia_24h", "ventilacion_mecanica", "hemorragia_masiva"
+)
+
+casos_cluster <- complete.cases(cohorte_torax[variables_cluster])
+datos_cluster <- cohorte_torax[casos_cluster, ]
+
+binarias_cluster <- setdiff(
+  variables_cluster,
+  c("edad_categoria", "pupilas")
+)
+
+matriz_binarias <- as.matrix(datos_cluster[binarias_cluster])
+matriz_edad <- model.matrix(
+  ~ edad_categoria - 1,
+  data = data.frame(edad_categoria = datos_cluster$edad_categoria)
+) * 0.5
+matriz_pupilas <- model.matrix(
+  ~ pupilas - 1,
+  data = data.frame(pupilas = datos_cluster$pupilas)
+) * 0.5
+
+matriz_cluster <- cbind(
+  matriz_binarias,
+  matriz_edad,
+  matriz_pupilas
+)
+storage.mode(matriz_cluster) <- "double"
+
+flujo_cluster <- data.frame(
+  etapa = c(
+    "Pacientes con MAIS toracico >=3",
+    "Casos completos para clustering",
+    "Excluidos por datos ausentes"
+  ),
+  n = c(
+    nrow(cohorte_torax),
+    nrow(datos_cluster),
+    sum(!casos_cluster)
+  )
+)
+
+knitr::kable(flujo_cluster, row.names = FALSE)
+```
+
+## Seleccion del numero de clusters
+
+Se comparan soluciones de 2 a 6 clusters mediante el ancho silhouette medio.
+Un valor mayor indica mejor separacion interna. Esta seleccion es exploratoria
+y no presupone que deban existir exactamente dos clusters.
+
+```{r seleccionar-k}
+if (!requireNamespace("cluster", quietly = TRUE)) {
+  stop("El paquete cluster es necesario para ejecutar este analisis.")
+}
+
+set.seed(20260921)
+valores_k <- 2:6
+
+modelos_k <- lapply(valores_k, function(k) {
+  cluster::clara(
+    matriz_cluster,
+    k = k,
+    metric = "manhattan",
+    samples = 50,
+    sampsize = min(1000, nrow(matriz_cluster)),
+    rngR = TRUE,
+    pamLike = TRUE
+  )
+})
+
+silhouette_medio <- vapply(
+  modelos_k,
+  function(modelo) modelo$silinfo$avg.width,
+  numeric(1)
+)
+
+k_optimo <- valores_k[which.max(silhouette_medio)]
+modelo_optimo <- modelos_k[[which.max(silhouette_medio)]]
+
+tabla_seleccion_k <- data.frame(
+  clusters = valores_k,
+  silhouette_medio = round(silhouette_medio, 3),
+  seleccionado = ifelse(valores_k == k_optimo, "Si", "")
+)
+
+knitr::kable(tabla_seleccion_k, row.names = FALSE)
+
+plot(
+  valores_k,
+  silhouette_medio,
+  type = "b",
+  pch = 19,
+  xlab = "Numero de clusters",
+  ylab = "Silhouette medio",
+  main = "Seleccion del numero de clusters"
+)
+```
+
+## Estabilidad de la solucion seleccionada
+
+Se repite CLARA cinco veces con semillas diferentes. La estabilidad se resume
+mediante el indice de Rand ajustado (ARI), que vale 1 cuando dos particiones
+coinciden completamente y se aproxima a 0 cuando su coincidencia es aleatoria.
+
+```{r estabilidad-clusters}
+indice_rand_ajustado <- function(clase_a, clase_b) {
+  tabla <- table(clase_a, clase_b)
+  combinaciones_2 <- function(x) x * (x - 1) / 2
+
+  acuerdo <- sum(combinaciones_2(tabla))
+  suma_filas <- sum(combinaciones_2(rowSums(tabla)))
+  suma_columnas <- sum(combinaciones_2(colSums(tabla)))
+  total <- combinaciones_2(sum(tabla))
+  esperado <- suma_filas * suma_columnas / total
+  maximo <- (suma_filas + suma_columnas) / 2
+
+  if (maximo == esperado) return(NA_real_)
+  (acuerdo - esperado) / (maximo - esperado)
+}
+
+semillas_estabilidad <- 20260922:20260926
+particiones_estabilidad <- lapply(semillas_estabilidad, function(semilla) {
+  set.seed(semilla)
+  cluster::clara(
+    matriz_cluster,
+    k = k_optimo,
+    metric = "manhattan",
+    samples = 50,
+    sampsize = min(1000, nrow(matriz_cluster)),
+    rngR = TRUE,
+    pamLike = TRUE
+  )$clustering
+})
+
+ari_estabilidad <- vapply(
+  particiones_estabilidad[-1],
+  function(particion) {
+    indice_rand_ajustado(particiones_estabilidad[[1]], particion)
+  },
+  numeric(1)
+)
+
+tabla_estabilidad <- data.frame(
+  comparacion = paste0("Repeticion 1 frente a ", 2:5),
+  ARI = round(ari_estabilidad, 3)
+)
+
+knitr::kable(tabla_estabilidad, row.names = FALSE)
+```
+
+## Solucion de dos clusters y grupos anatomicos
+
+Aunque el numero optimo se selecciona sin imponerlo, se conserva una solucion
+de dos clusters para compararla directamente con `Torax solo` y
+`Torax + otra lesion`. La tabla presenta porcentajes por fila.
+
+```{r comparar-clusters-grupos}
+modelo_k2 <- modelos_k[[which(valores_k == 2)]]
+datos_cluster$cluster_2 <- factor(modelo_k2$clustering)
+
+tabla_cluster_grupo <- table(
+  datos_cluster$grupo_torax,
+  datos_cluster$cluster_2
+)
+
+tabla_cluster_grupo_pct <- round(
+  100 * prop.table(tabla_cluster_grupo, margin = 1),
+  1
+)
+
+prueba_asociacion <- chisq.test(tabla_cluster_grupo, correct = FALSE)
+cramer_v <- sqrt(
+  as.numeric(prueba_asociacion$statistic) /
+    (sum(tabla_cluster_grupo) *
+      min(nrow(tabla_cluster_grupo) - 1, ncol(tabla_cluster_grupo) - 1))
+)
+
+ari_grupo_cluster <- indice_rand_ajustado(
+  datos_cluster$grupo_torax,
+  datos_cluster$cluster_2
+)
+
+knitr::kable(
+  as.data.frame.matrix(tabla_cluster_grupo_pct),
+  row.names = TRUE,
+  caption = "Distribucion de los clusters dentro de cada grupo anatomico (%)"
+)
+
+resumen_asociacion <- data.frame(
+  medida = c("Valor p chi-cuadrado", "V de Cramer", "ARI"),
+  valor = c(
+    formatear_p(prueba_asociacion$p.value),
+    sprintf("%.3f", cramer_v),
+    sprintf("%.3f", ari_grupo_cluster)
+  )
+)
+
+knitr::kable(resumen_asociacion, row.names = FALSE)
+```
+
+## Tabla 2 por cluster
+
+Se repite la estructura completa de la Tabla 2 para comparar la solucion de
+dos clusters. Los porcentajes se calculan entre los pacientes con dato
+disponible para cada variable. La mortalidad se presenta como una fila
+adicional y no intervino en la creacion de los clusters.
+
+```{r funciones-tabla-clusters, include=FALSE}
+porcentaje_valor_cluster <- function(variable, valor, cluster) {
+  datos <- datos_cluster[
+    datos_cluster$cluster_2 == cluster,
+    variable
+  ]
+  disponibles <- !is.na(datos)
+
+  if (sum(disponibles) == 0) {
+    return(NA_character_)
+  }
+
+  sprintf("%.1f", 100 * mean(datos[disponibles] == valor))
+}
+
+p_variable_cluster <- function(variable) {
+  x <- datos_cluster[[variable]]
+  completos <- !is.na(x) & !is.na(datos_cluster$cluster_2)
+  tabla <- table(datos_cluster$cluster_2[completos], x[completos])
+
+  if (nrow(tabla) < 2 || ncol(tabla) < 2) {
+    return("-")
+  }
+
+  prueba_chi <- suppressWarnings(chisq.test(tabla, correct = FALSE))
+
+  if (any(prueba_chi$expected < 5)) {
+    if (all(dim(tabla) == c(2, 2))) {
+      p_fisher <- fisher.test(tabla)$p.value
+    } else {
+      set.seed(20260921)
+      p_fisher <- fisher.test(
+        tabla,
+        simulate.p.value = TRUE,
+        B = 10000
+      )$p.value
+    }
+    formatear_p(p_fisher)
+  } else {
+    formatear_p(prueba_chi$p.value)
+  }
+}
+
+fila_categoria_cluster <- function(etiqueta, variable) {
+  data.frame(
+    Variable = etiqueta,
+    `Cluster 1 (%)` = "",
+    `Cluster 2 (%)` = "",
+    `Valor p` = p_variable_cluster(variable),
+    check.names = FALSE
+  )
+}
+
+fila_nivel_cluster <- function(etiqueta, variable, valor, p = "") {
+  data.frame(
+    Variable = etiqueta,
+    `Cluster 1 (%)` = porcentaje_valor_cluster(variable, valor, "1"),
+    `Cluster 2 (%)` = porcentaje_valor_cluster(variable, valor, "2"),
+    `Valor p` = p,
+    check.names = FALSE
+  )
+}
+
+fila_binaria_cluster <- function(
+  etiqueta,
+  variable,
+  valor = 1,
+  contrastar = TRUE
+) {
+  fila_nivel_cluster(
+    etiqueta,
+    variable,
+    valor,
+    if (contrastar) p_variable_cluster(variable) else "-"
+  )
+}
+```
+
+```{r tabla-2-clusters, echo=FALSE}
+tabla_2_clusters <- rbind(
+  fila_categoria_cluster("Edad (grupos)", "edad_categoria"),
+  fila_nivel_cluster("  <50", "edad_categoria", "<50"),
+  fila_nivel_cluster("  50-65", "edad_categoria", "50-65"),
+  fila_nivel_cluster("  66-75", "edad_categoria", "66-75"),
+  fila_nivel_cluster("  >75", "edad_categoria", ">75"),
+  fila_binaria_cluster("Sexo masculino", "genero_masculino"),
+  fila_binaria_cluster("PRECOAG", "precoag"),
+  fila_binaria_cluster(
+    "Atencion prehospitalaria medica",
+    "atencion_prehospitalaria_medica"
+  ),
+  fila_binaria_cluster(
+    "Intubacion prehospitalaria",
+    "iot_prehospitalaria"
+  ),
+  fila_binaria_cluster(
+    "Mecanismo de alto riesgo",
+    "mecanismo_alto_riesgo"
+  ),
+  fila_binaria_cluster("Mecanismo penetrante", "trauma_penetrante"),
+  fila_categoria_cluster("Pupilas", "pupilas"),
+  fila_nivel_cluster("  Normales", "pupilas", "normal"),
+  fila_nivel_cluster(
+    "  Midriasis unilateral",
+    "pupilas",
+    "midriasis unilateral"
+  ),
+  fila_nivel_cluster(
+    "  Midriasis bilateral",
+    "pupilas",
+    "midriasis bilateral"
+  ),
+  fila_binaria_cluster("GCS <=8", "gcs_menor_igual_8"),
+  fila_binaria_cluster("MAIS cabeza", "mais_cabeza"),
+  fila_binaria_cluster("MAIS torax", "mais_torax"),
+  fila_binaria_cluster("MAIS abdomen", "mais_abdomen"),
+  fila_binaria_cluster("MAIS extremidad superior", "mais_ext_superior"),
+  fila_binaria_cluster("MAIS extremidad inferior", "mais_ext_inferior"),
+  fila_binaria_cluster("MAIS externo", "mais_externo"),
+  fila_binaria_cluster("Fallo hemodinamico", "fallo_hemodinamico"),
+  fila_binaria_cluster("Fallo respiratorio", "fallo_respiratorio"),
+  fila_binaria_cluster("Coagulopatia", "coagulopatia_24h"),
+  fila_binaria_cluster("Ventilacion mecanica", "ventilacion_mecanica"),
+  fila_binaria_cluster("Hemorragia masiva", "hemorragia_masiva"),
+  fila_binaria_cluster("Mortalidad a 30 dias", "mortalidad_30d")
+)
+
+n_clusters <- table(datos_cluster$cluster_2)
+
+names(tabla_2_clusters)[2:3] <- c(
+  sprintf("Cluster 1 (N=%d), %%", n_clusters["1"]),
+  sprintf("Cluster 2 (N=%d), %%", n_clusters["2"])
+)
+
+knitr::kable(
+  tabla_2_clusters,
+  align = c("l", "r", "r", "r"),
+  row.names = FALSE,
+  caption = paste(
+    "Tabla 2. Variables RETRASCORE segun la solucion de dos clusters.",
+    "Valores expresados como porcentajes."
+  )
+)
+```
+
+## Perfil clinico de los dos clusters
+
+Los porcentajes siguientes describen cada cluster usando las mismas variables
+que entraron en el algoritmo.
+
+```{r perfiles-clusters, echo=FALSE}
+definicion_perfiles <- data.frame(
+  etiqueta = c(
+    "Edad <50", "Edad 50-65", "Edad 66-75", "Edad >75",
+    "Sexo masculino", "PRECOAG", "Atencion prehospitalaria medica",
+    "Intubacion prehospitalaria", "Mecanismo de alto riesgo",
+    "Mecanismo penetrante", "Pupilas normales",
+    "Midriasis unilateral", "Midriasis bilateral", "GCS <=8",
+    "Fallo hemodinamico", "Fallo respiratorio", "Coagulopatia",
+    "Ventilacion mecanica", "Hemorragia masiva"
+  ),
+  variable = c(
+    rep("edad_categoria", 4), "genero_masculino", "precoag",
+    "atencion_prehospitalaria_medica", "iot_prehospitalaria",
+    "mecanismo_alto_riesgo", "trauma_penetrante", rep("pupilas", 3),
+    "gcs_menor_igual_8", "fallo_hemodinamico", "fallo_respiratorio",
+    "coagulopatia_24h", "ventilacion_mecanica", "hemorragia_masiva"
+  ),
+  valor = c(
+    "<50", "50-65", "66-75", ">75", rep("1", 6),
+    "normal", "midriasis unilateral", "midriasis bilateral", rep("1", 6)
+  ),
+  stringsAsFactors = FALSE
+)
+
+porcentaje_en_cluster <- function(cluster, variable, valor) {
+  x <- datos_cluster[
+    datos_cluster$cluster_2 == cluster,
+    variable
+  ]
+  100 * mean(as.character(x) == valor)
+}
+
+matriz_perfiles <- sapply(levels(datos_cluster$cluster_2), function(cluster) {
+  mapply(
+    porcentaje_en_cluster,
+    cluster = cluster,
+    variable = definicion_perfiles$variable,
+    valor = definicion_perfiles$valor
+  )
+})
+
+colnames(matriz_perfiles) <- paste0(
+  "Cluster ",
+  levels(datos_cluster$cluster_2)
+)
+rownames(matriz_perfiles) <- definicion_perfiles$etiqueta
+
+tabla_perfiles <- data.frame(
+  Variable = rownames(matriz_perfiles),
+  round(matriz_perfiles, 1),
+  row.names = NULL,
+  check.names = FALSE
+)
+
+knitr::kable(
+  tabla_perfiles,
+  row.names = FALSE,
+  caption = "Perfil clinico de la solucion de dos clusters (%)"
+)
+
+heatmap(
+  matriz_perfiles,
+  Rowv = NA,
+  Colv = NA,
+  scale = "none",
+  col = colorRampPalette(c("white", "#FDBE85", "#D7301F"))(50),
+  margins = c(8, 14),
+  xlab = "",
+  ylab = "",
+  main = "Porcentaje de cada caracteristica por cluster"
+)
+```
+
+## Visualizacion de los pacientes
+
+La proyeccion de componentes principales se usa solamente para visualizar la
+matriz de indicadores; no participa en la asignacion de clusters.
+
+```{r visualizar-clusters, echo=FALSE}
+componentes <- prcomp(
+  matriz_cluster,
+  center = TRUE,
+  scale. = FALSE
+)
+
+set.seed(20260927)
+indices_grafico <- sample(
+  seq_len(nrow(matriz_cluster)),
+  min(2000, nrow(matriz_cluster))
+)
+
+colores_cluster <- c("#4472C4", "#ED7D31")
+
+plot(
+  componentes$x[indices_grafico, 1],
+  componentes$x[indices_grafico, 2],
+  col = colores_cluster[datos_cluster$cluster_2[indices_grafico]],
+  pch = 16,
+  cex = 0.55,
+  xlab = "Componente principal 1",
+  ylab = "Componente principal 2",
+  main = "Proyeccion de la solucion de dos clusters"
+)
+
+legend(
+  "topright",
+  legend = paste("Cluster", levels(datos_cluster$cluster_2)),
+  col = colores_cluster,
+  pch = 16,
+  bty = "n"
+)
+```
+
+## Mortalidad posterior al clustering
+
+La mortalidad no se utilizo para crear los clusters. Se presenta despues para
+describir si los perfiles identificados tienen diferente pronostico.
+
+```{r mortalidad-clusters, echo=FALSE}
+resumen_mortalidad_cluster <- do.call(
+  rbind,
+  lapply(levels(datos_cluster$cluster_2), function(cluster) {
+    d <- datos_cluster[datos_cluster$cluster_2 == cluster, ]
+    disponible <- !is.na(d$mortalidad_30d)
+
+    data.frame(
+      cluster = paste("Cluster", cluster),
+      n = nrow(d),
+      mortalidad_30d_n = sum(d$mortalidad_30d == 1, na.rm = TRUE),
+      mortalidad_30d_denominador = sum(disponible),
+      mortalidad_30d_pct = round(
+        100 * mean(d$mortalidad_30d[disponible] == 1),
+        1
+      )
+    )
+  })
+)
+
+knitr::kable(resumen_mortalidad_cluster, row.names = FALSE)
+```
+
+El clustering es exploratorio. Una asociacion entre los clusters y los grupos
+anatomicos no implica que sean equivalentes ni demuestra causalidad. La
+interpretacion debe considerar el silhouette, la estabilidad, el perfil de
+variables y el tamano clinico de las diferencias.

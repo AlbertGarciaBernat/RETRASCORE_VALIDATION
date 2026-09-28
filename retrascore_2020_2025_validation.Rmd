@@ -1,0 +1,783 @@
+---
+title: "RETRASCORE temporal validation: 2020-2025"
+subtitle: "Comparison with the 2015-2019 cohort"
+date: "`r format(Sys.Date(), '%Y-%m-%d')`"
+output:
+  html_document:
+    toc: true
+    toc_depth: 3
+    number_sections: true
+    self_contained: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo = TRUE,
+  warning = FALSE,
+  message = FALSE,
+  fig.width = 11,
+  fig.height = 6.5,
+  dpi = 120
+)
+
+# Keep the UTF-8 column names intact when the RDS is read on Windows.
+try(Sys.setlocale("LC_CTYPE", "English_United States.utf8"), silent = TRUE)
+
+required_packages <- c("dplyr", "ggplot2", "pROC")
+missing_packages <- required_packages[
+  !vapply(required_packages, requireNamespace, logical(1), quietly = TRUE)
+]
+if (length(missing_packages)) {
+  stop("Install the following packages before knitting: ",
+       paste(missing_packages, collapse = ", "))
+}
+
+library(dplyr)
+library(ggplot2)
+
+source_file <- "cohorte_retrascore.rds"
+if (!file.exists(source_file)) {
+  stop("cohorte_retrascore.rds was not found in the working directory.")
+}
+
+cohort <- readRDS(source_file)
+output_dir <- "outputs_retrascore_2020_2025_validation"
+dir.create(output_dir, showWarnings = FALSE, recursive = TRUE)
+
+# Normalize the year field because its UTF-8 name can be displayed differently
+# by different Windows locales.
+ascii_names <- tolower(iconv(
+  names(cohort), from = "UTF-8", to = "ASCII//TRANSLIT"
+))
+year_index <- which(ascii_names == "ano_trauma")
+if (length(year_index) != 1L) {
+  stop("The trauma-year column could not be identified uniquely.")
+}
+names(cohort)[year_index] <- "ano_trauma"
+```
+
+# Aim and validation design
+
+The original RETRASCORE is applied without re-estimating any coefficient. The
+historical cohort contains patients from 2015-2019, the period used in the
+article, and the new temporal cohort contains patients from 2020 onward. Only
+years no later than the year in which this report is run are accepted; this
+excludes impossible future dates.
+
+The outcome is 30-day mortality. A score and predicted probability are
+calculated only when all 13 RETRASCORE predictors are available. Validation
+metrics additionally require a known 30-day outcome. No missing values are
+imputed.
+
+The published logistic equation is used for predicted mortality. The integer
+score is calculated as described in the article: each shrunken regression
+coefficient is multiplied by two and rounded to the nearest integer. Published
+risk categories are also assigned to every patient with a calculable score.
+
+```{r published-score-table, echo=FALSE}
+published_points <- data.frame(
+  Predictor = c(
+    "Age <50", "Age 50-65", "Age 66-75", "Age >75", "PRECOAG",
+    "Pre-hospital intubation", "High-risk mechanism", "Normal pupils",
+    "Unilateral mydriasis", "Bilateral mydriasis", "GCS <=8",
+    "MAIS head", "MAIS thorax", "Haemodynamic failure",
+    "Respiratory failure", "Coagulopathy at 24 h",
+    "Mechanical ventilation", "Massive haemorrhage"
+  ),
+  Coefficient = c(
+    0, 0.598, 1.239, 2.198, 0.349, 0.336, 0.662, 0, 0.950,
+    3.217, 0.841, 0.495, -0.271, 1.148, 0.708, 0.567, 0.580, 0.452
+  ),
+  Points = c(0, 1, 2, 4, 1, 1, 1, 0, 2, 6, 2, 1, -1, 2, 1, 1, 1, 1),
+  check.names = FALSE
+)
+knitr::kable(
+  published_points,
+  digits = 3,
+  caption = "Published RETRASCORE coefficients and integer points"
+)
+```
+
+# Data checks and cohort definition
+
+```{r data-checks}
+model_variables <- c(
+  "edad_categoria", "precoag", "iot_prehospitalaria",
+  "mecanismo_alto_riesgo", "pupilas", "gcs_menor_igual_8",
+  "mais_cabeza", "mais_torax", "fallo_hemodinamico",
+  "fallo_respiratorio", "coagulopatia_24h",
+  "ventilacion_mecanica", "hemorragia_masiva"
+)
+required_variables <- c("ano_trauma", "mortalidad_30d", model_variables)
+missing_variables <- setdiff(required_variables, names(cohort))
+if (length(missing_variables)) {
+  stop("Missing required variables: ", paste(missing_variables, collapse = ", "))
+}
+
+check_binary <- function(x, variable_name) {
+  observed <- unique(stats::na.omit(x))
+  if (!all(observed %in% c(0, 1))) {
+    stop("Variable '", variable_name, "' contains values other than 0, 1 or NA.")
+  }
+  as.integer(x)
+}
+
+binary_variables <- setdiff(
+  model_variables,
+  c("edad_categoria", "pupilas")
+)
+for (variable_name in binary_variables) {
+  cohort[[variable_name]] <- check_binary(
+    cohort[[variable_name]], variable_name
+  )
+}
+cohort$mortalidad_30d <- check_binary(
+  cohort$mortalidad_30d, "mortalidad_30d"
+)
+
+valid_age_levels <- c("<50", "50-65", "66-75", ">75")
+unexpected_age <- setdiff(
+  unique(stats::na.omit(as.character(cohort$edad_categoria))),
+  valid_age_levels
+)
+if (length(unexpected_age)) {
+  stop("Unexpected age categories: ", paste(unexpected_age, collapse = ", "))
+}
+
+valid_pupil_levels <- c(
+  "normal", "midriasis unilateral", "midriasis bilateral"
+)
+unexpected_pupils <- setdiff(
+  unique(stats::na.omit(as.character(cohort$pupilas))),
+  valid_pupil_levels
+)
+if (length(unexpected_pupils)) {
+  stop("Unexpected pupil categories: ", paste(unexpected_pupils, collapse = ", "))
+}
+
+current_year <- as.integer(format(Sys.Date(), "%Y"))
+future_years <- sort(unique(cohort$ano_trauma[
+  !is.na(cohort$ano_trauma) & cohort$ano_trauma > current_year
+]))
+
+analysis_cohort <- cohort %>%
+  filter(
+    !is.na(ano_trauma),
+    ano_trauma >= 2015,
+    ano_trauma <= current_year
+  ) %>%
+  mutate(
+    period = case_when(
+      ano_trauma >= 2015 & ano_trauma <= 2019 ~ "2015-2019",
+      ano_trauma >= 2020 ~ "2020 onward",
+      TRUE ~ NA_character_
+    ),
+    period = factor(period, levels = c("2015-2019", "2020 onward"))
+  ) %>%
+  filter(!is.na(period))
+
+if (!nrow(analysis_cohort)) stop("No patients met the date criteria.")
+if (any(table(analysis_cohort$period) == 0)) {
+  stop("At least one comparison period has no patients.")
+}
+
+latest_new_year <- max(
+  analysis_cohort$ano_trauma[analysis_cohort$period == "2020 onward"]
+)
+levels(analysis_cohort$period) <- c(
+  "2015-2019", paste0("2020-", latest_new_year)
+)
+period_labels <- levels(analysis_cohort$period)
+```
+
+```{r cohort-flow, echo=FALSE}
+flow_table <- analysis_cohort %>%
+  group_by(period) %>%
+  summarise(
+    Patients = n(),
+    `Known 30-day outcome` = sum(!is.na(mortalidad_30d)),
+    `Complete RETRASCORE predictors` = sum(
+      complete.cases(across(all_of(model_variables)))
+    ),
+    `Complete predictors and outcome` = sum(
+      complete.cases(across(all_of(c(model_variables, "mortalidad_30d"))))
+    ),
+    .groups = "drop"
+  )
+
+date_audit <- data.frame(
+  Item = c(
+    "Rows in source RDS",
+    "Rows in the two requested periods",
+    "Latest included year",
+    "Future/impossible years excluded"
+  ),
+  Value = c(
+    nrow(cohort),
+    nrow(analysis_cohort),
+    latest_new_year,
+    if (length(future_years)) paste(future_years, collapse = ", ") else "None"
+  )
+)
+
+knitr::kable(date_audit, caption = "Date audit")
+knitr::kable(flow_table, caption = "Cohort flow and complete-case denominators")
+```
+
+# Patient-level RETRASCORE
+
+```{r calculate-retrascore}
+age <- as.character(analysis_cohort$edad_categoria)
+pupils <- as.character(analysis_cohort$pupilas)
+
+score_components <- data.frame(
+  age = unname(c("<50" = 0L, "50-65" = 1L, "66-75" = 2L, ">75" = 4L)[age]),
+  precoag = analysis_cohort$precoag,
+  prehospital_intubation = analysis_cohort$iot_prehospitalaria,
+  high_risk_mechanism = analysis_cohort$mecanismo_alto_riesgo,
+  pupils = unname(c(
+    "normal" = 0L,
+    "midriasis unilateral" = 2L,
+    "midriasis bilateral" = 6L
+  )[pupils]),
+  gcs_le_8 = 2L * analysis_cohort$gcs_menor_igual_8,
+  mais_head = analysis_cohort$mais_cabeza,
+  mais_thorax = -analysis_cohort$mais_torax,
+  haemodynamic_failure = 2L * analysis_cohort$fallo_hemodinamico,
+  respiratory_failure = analysis_cohort$fallo_respiratorio,
+  coagulopathy = analysis_cohort$coagulopatia_24h,
+  mechanical_ventilation = analysis_cohort$ventilacion_mecanica,
+  massive_haemorrhage = analysis_cohort$hemorragia_masiva
+)
+
+score_available <- complete.cases(score_components)
+analysis_cohort$retrascore <- NA_integer_
+analysis_cohort$retrascore[score_available] <- rowSums(
+  score_components[score_available, , drop = FALSE]
+)
+
+linear_predictor <- rep(NA_real_, nrow(analysis_cohort))
+linear_predictor[score_available] <- with(
+  analysis_cohort[score_available, , drop = FALSE],
+  -5.432 +
+    0.598 * (edad_categoria == "50-65") +
+    1.239 * (edad_categoria == "66-75") +
+    2.198 * (edad_categoria == ">75") +
+    0.349 * precoag +
+    0.336 * iot_prehospitalaria +
+    0.662 * mecanismo_alto_riesgo +
+    0.950 * (pupilas == "midriasis unilateral") +
+    3.217 * (pupilas == "midriasis bilateral") +
+    0.841 * gcs_menor_igual_8 +
+    0.495 * mais_cabeza -
+    0.271 * mais_torax +
+    1.148 * fallo_hemodinamico +
+    0.708 * fallo_respiratorio +
+    0.567 * coagulopatia_24h +
+    0.580 * ventilacion_mecanica +
+    0.452 * hemorragia_masiva
+)
+analysis_cohort$predicted_mortality <- plogis(linear_predictor)
+
+risk_levels <- c(
+  "Very low (<5)", "Low (5-6)", "Medium (7-8)",
+  "High (9-11)", "Very high (12-13)", "Extreme (14+)"
+)
+analysis_cohort$risk_group <- cut(
+  analysis_cohort$retrascore,
+  breaks = c(-Inf, 4, 6, 8, 11, 13, Inf),
+  labels = risk_levels,
+  ordered_result = TRUE
+)
+analysis_cohort$score_display_group <- ifelse(
+  is.na(analysis_cohort$retrascore),
+  NA_character_,
+  ifelse(
+    analysis_cohort$retrascore >= 14,
+    "14+",
+    as.character(analysis_cohort$retrascore)
+  )
+)
+
+# Preserve identifiers when present, but do not require a particular identifier.
+identifier_candidates <- c("id_fila", "historia", "registro", "hospital")
+identifier_variables <- intersect(identifier_candidates, names(analysis_cohort))
+patient_results <- analysis_cohort %>%
+  select(
+    all_of(identifier_variables), ano_trauma, period, mortalidad_30d,
+    all_of(model_variables), retrascore, score_display_group, risk_group,
+    predicted_mortality
+  )
+
+utils::write.csv(
+  patient_results,
+  file.path(output_dir, "retrascore_patient_scores.csv"),
+  row.names = FALSE,
+  na = "",
+  fileEncoding = "UTF-8"
+)
+
+stopifnot(
+  all(is.na(analysis_cohort$retrascore) == !score_available),
+  all(analysis_cohort$predicted_mortality[score_available] >= 0),
+  all(analysis_cohort$predicted_mortality[score_available] <= 1)
+)
+```
+
+The file `outputs_retrascore_2020_2025_validation/retrascore_patient_scores.csv`
+contains the RETRASCORE, published risk group, and predicted probability for
+every patient in both periods. Rows with an incomplete score retain `NA`, so
+missing data are explicit rather than silently treated as zero.
+
+```{r patient-score-summary, echo=FALSE}
+score_summary <- analysis_cohort %>%
+  group_by(period) %>%
+  summarise(
+    Patients = n(),
+    `Score calculated` = sum(!is.na(retrascore)),
+    `Score missing` = sum(is.na(retrascore)),
+    `Minimum score` = min(retrascore, na.rm = TRUE),
+    `Median score` = median(retrascore, na.rm = TRUE),
+    `Maximum score` = max(retrascore, na.rm = TRUE),
+    .groups = "drop"
+  )
+knitr::kable(score_summary, caption = "Patient-level score availability")
+```
+
+# Validation of the published equation
+
+The primary validation uses the continuous predicted probability, not a
+re-fitted model or an arbitrary classification threshold. Discrimination is
+summarised by AUROC with a DeLong 95% confidence interval; overall accuracy by
+the Brier score; and calibration by mean predicted versus observed mortality,
+observed-to-expected deaths, calibration intercept, and calibration slope.
+
+```{r validation-metrics}
+evaluate_period <- function(data, period_name) {
+  evaluable <- data %>%
+    filter(!is.na(mortalidad_30d), !is.na(predicted_mortality))
+  if (length(unique(evaluable$mortalidad_30d)) != 2L) {
+    stop("Both outcome classes are required in ", period_name, ".")
+  }
+
+  roc_object <- pROC::roc(
+    response = evaluable$mortalidad_30d,
+    predictor = evaluable$predicted_mortality,
+    levels = c(0, 1),
+    direction = "<",
+    quiet = TRUE
+  )
+  auc_ci <- as.numeric(pROC::ci.auc(roc_object, method = "delong"))
+  lp <- qlogis(pmin(pmax(evaluable$predicted_mortality, 1e-12), 1 - 1e-12))
+  calibration_intercept_model <- glm(
+    evaluable$mortalidad_30d ~ 1,
+    offset = lp,
+    family = binomial(link = "logit")
+  )
+  calibration_slope_model <- glm(
+    evaluable$mortalidad_30d ~ lp,
+    family = binomial(link = "logit")
+  )
+
+  data.frame(
+    Period = period_name,
+    N = nrow(evaluable),
+    Deaths = sum(evaluable$mortalidad_30d),
+    `Observed mortality (%)` = 100 * mean(evaluable$mortalidad_30d),
+    `Predicted mortality (%)` = 100 * mean(evaluable$predicted_mortality),
+    `Observed/expected deaths` = sum(evaluable$mortalidad_30d) /
+      sum(evaluable$predicted_mortality),
+    AUROC = as.numeric(pROC::auc(roc_object)),
+    `AUROC 95% CI lower` = auc_ci[1],
+    `AUROC 95% CI upper` = auc_ci[3],
+    Brier = mean(
+      (evaluable$mortalidad_30d - evaluable$predicted_mortality)^2
+    ),
+    `Calibration intercept` = unname(coef(calibration_intercept_model)[1]),
+    `Calibration slope` = unname(coef(calibration_slope_model)[2]),
+    check.names = FALSE
+  )
+}
+
+validation_results <- do.call(
+  rbind,
+  lapply(period_labels, function(period_name) {
+    evaluate_period(
+      analysis_cohort[analysis_cohort$period == period_name, , drop = FALSE],
+      period_name
+    )
+  })
+)
+row.names(validation_results) <- NULL
+
+utils::write.csv(
+  validation_results,
+  file.path(output_dir, "retrascore_validation_metrics.csv"),
+  row.names = FALSE,
+  fileEncoding = "UTF-8"
+)
+
+validation_display <- validation_results
+validation_display$`AUROC (95% CI)` <- sprintf(
+  "%.3f (%.3f-%.3f)",
+  validation_display$AUROC,
+  validation_display$`AUROC 95% CI lower`,
+  validation_display$`AUROC 95% CI upper`
+)
+validation_display <- validation_display[, c(
+  "Period", "N", "Deaths", "Observed mortality (%)",
+  "Predicted mortality (%)", "Observed/expected deaths",
+  "AUROC (95% CI)", "Brier", "Calibration intercept",
+  "Calibration slope"
+)]
+
+knitr::kable(
+  validation_display,
+  digits = c(0, 0, 0, 2, 2, 3, 0, 3, 3, 3),
+  caption = "Validation of the unchanged published RETRASCORE equation"
+)
+```
+
+For calibration, ideal values are an observed-to-expected ratio of 1, an
+intercept of 0, and a slope of 1. Lower Brier scores are better. These measures
+should be interpreted together with the cohort size and number of deaths.
+
+## Calibration by risk decile
+
+```{r calibration-deciles}
+calibration_deciles <- analysis_cohort %>%
+  filter(!is.na(mortalidad_30d), !is.na(predicted_mortality)) %>%
+  group_by(period) %>%
+  mutate(risk_decile = dplyr::ntile(predicted_mortality, 10)) %>%
+  group_by(period, risk_decile) %>%
+  summarise(
+    Patients = n(),
+    predicted = mean(predicted_mortality),
+    observed = mean(mortalidad_30d),
+    .groups = "drop"
+  )
+
+calibration_plot <- ggplot(
+  calibration_deciles,
+  aes(x = predicted * 100, y = observed * 100)
+) +
+  geom_abline(intercept = 0, slope = 1, linetype = 2, colour = "grey45") +
+  geom_line(colour = "#1B6CA8", linewidth = 0.8) +
+  geom_point(aes(size = Patients), colour = "#1B6CA8", alpha = 0.85) +
+  facet_wrap(~ period) +
+  coord_equal(xlim = c(0, 100), ylim = c(0, 100)) +
+  scale_x_continuous(breaks = seq(0, 100, 20)) +
+  scale_y_continuous(breaks = seq(0, 100, 20)) +
+  labs(
+    title = "Calibration of the published RETRASCORE equation",
+    subtitle = "Observed versus predicted 30-day mortality by risk decile",
+    x = "Mean predicted mortality (%)",
+    y = "Observed mortality (%)",
+    size = "Patients"
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(panel.grid.minor = element_blank())
+
+calibration_plot
+
+ggsave(
+  file.path(output_dir, "retrascore_calibration_by_decile.png"),
+  calibration_plot,
+  width = 11,
+  height = 6.5,
+  dpi = 180
+)
+```
+
+# Mortality by RETRASCORE group
+
+Exact binomial 95% confidence intervals are shown around the observed
+mortality. The denominator is the number of scored patients with a known
+30-day outcome in each group.
+
+```{r mortality-by-risk-group}
+summarise_mortality <- function(data) {
+  data %>%
+    filter(!is.na(mortalidad_30d), !is.na(risk_group)) %>%
+    group_by(period, risk_group, .drop = FALSE) %>%
+    summarise(
+      Patients = n(),
+      Deaths = sum(mortalidad_30d),
+      `Observed mortality (%)` = 100 * mean(mortalidad_30d),
+      `Predicted mortality (%)` = 100 * mean(predicted_mortality),
+      .groups = "drop"
+    ) %>%
+    rowwise() %>%
+    mutate(
+      `95% CI lower` = if (Patients > 0) {
+        100 * stats::binom.test(Deaths, Patients)$conf.int[1]
+      } else NA_real_,
+      `95% CI upper` = if (Patients > 0) {
+        100 * stats::binom.test(Deaths, Patients)$conf.int[2]
+      } else NA_real_
+    ) %>%
+    ungroup()
+}
+
+mortality_by_group <- summarise_mortality(analysis_cohort)
+
+utils::write.csv(
+  mortality_by_group,
+  file.path(output_dir, "mortality_by_retrascore_risk_group.csv"),
+  row.names = FALSE,
+  fileEncoding = "UTF-8"
+)
+
+knitr::kable(
+  mortality_by_group,
+  digits = c(0, 0, 0, 0, 2, 2, 2, 2),
+  caption = "Observed and predicted mortality by published RETRASCORE risk group"
+)
+```
+
+```{r plot-mortality-groups, echo=FALSE, fig.cap="Observed 30-day mortality by published RETRASCORE risk group and period."}
+dodge <- position_dodge(width = 0.82)
+mortality_group_plot <- ggplot(
+  mortality_by_group,
+  aes(x = risk_group, y = `Observed mortality (%)`, fill = period)
+) +
+  geom_col(position = dodge, width = 0.76, colour = "white") +
+  geom_errorbar(
+    aes(ymin = `95% CI lower`, ymax = `95% CI upper`),
+    position = dodge,
+    width = 0.20,
+    linewidth = 0.45
+  ) +
+  geom_text(
+    aes(label = sprintf("%.1f%%\n(n=%d)", `Observed mortality (%)`, Patients)),
+    position = dodge,
+    vjust = -0.45,
+    size = 3.1,
+    lineheight = 0.9
+  ) +
+  scale_fill_manual(values = c("#377EB8", "#E6550D")) +
+  scale_y_continuous(
+    limits = c(0, 105),
+    breaks = seq(0, 100, 20),
+    expand = expansion(mult = c(0, 0.02))
+  ) +
+  labs(
+    title = "Mortality by RETRASCORE risk group",
+    subtitle = "Bars show observed 30-day mortality; error bars are exact 95% CIs",
+    x = "Published RETRASCORE risk group",
+    y = "Observed 30-day mortality (%)",
+    fill = "Cohort"
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(
+    panel.grid.minor = element_blank(),
+    axis.text.x = element_text(angle = 25, hjust = 1),
+    legend.position = "top"
+  )
+
+mortality_group_plot
+
+ggsave(
+  file.path(output_dir, "mortality_by_retrascore_risk_group.png"),
+  mortality_group_plot,
+  width = 12,
+  height = 7,
+  dpi = 180
+)
+```
+
+## Predicted versus observed mortality in 2020-2025
+
+This plot directly compares the mean mortality predicted by the unchanged
+published equation with the observed 30-day mortality in each RETRASCORE risk
+group in the new temporal cohort. Error bars around observed mortality are
+exact binomial 95% confidence intervals; predicted mortality is a model
+estimate and is therefore shown without those outcome-based intervals.
+
+```{r predicted-versus-observed-2020-2025, echo=FALSE, fig.cap="Predicted and observed 30-day mortality by RETRASCORE risk group in 2020-2025."}
+new_period_name <- period_labels[2]
+mortality_new_period <- mortality_by_group %>%
+  filter(period == new_period_name) %>%
+  select(
+    risk_group, Patients, Deaths,
+    `Observed mortality (%)`, `Predicted mortality (%)`,
+    `95% CI lower`, `95% CI upper`
+  )
+
+plot_data_new_period <- rbind(
+  data.frame(
+    risk_group = mortality_new_period$risk_group,
+    Patients = mortality_new_period$Patients,
+    mortality_type = "Observed",
+    mortality_pct = mortality_new_period$`Observed mortality (%)`,
+    ci_lower = mortality_new_period$`95% CI lower`,
+    ci_upper = mortality_new_period$`95% CI upper`
+  ),
+  data.frame(
+    risk_group = mortality_new_period$risk_group,
+    Patients = mortality_new_period$Patients,
+    mortality_type = "Predicted",
+    mortality_pct = mortality_new_period$`Predicted mortality (%)`,
+    ci_lower = NA_real_,
+    ci_upper = NA_real_
+  )
+)
+plot_data_new_period$mortality_type <- factor(
+  plot_data_new_period$mortality_type,
+  levels = c("Predicted", "Observed")
+)
+
+dodge_new_period <- position_dodge(width = 0.82)
+predicted_observed_plot <- ggplot(
+  plot_data_new_period,
+  aes(x = risk_group, y = mortality_pct, fill = mortality_type)
+) +
+  geom_col(position = dodge_new_period, width = 0.76, colour = "white") +
+  geom_errorbar(
+    aes(ymin = ci_lower, ymax = ci_upper),
+    position = dodge_new_period,
+    width = 0.20,
+    linewidth = 0.45,
+    na.rm = TRUE
+  ) +
+  geom_text(
+    aes(label = sprintf("%.1f%%", mortality_pct)),
+    position = dodge_new_period,
+    vjust = -0.45,
+    size = 3.2
+  ) +
+  scale_fill_manual(
+    values = c("Predicted" = "#756BB1", "Observed" = "#E6550D")
+  ) +
+  scale_y_continuous(
+    limits = c(0, 105),
+    breaks = seq(0, 100, 20),
+    expand = expansion(mult = c(0, 0.02))
+  ) +
+  labs(
+    title = paste0("Predicted versus observed mortality, ", new_period_name),
+    subtitle = "Comparison within the published RETRASCORE risk groups",
+    x = "Published RETRASCORE risk group",
+    y = "30-day mortality (%)",
+    fill = "Mortality"
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(
+    panel.grid.minor = element_blank(),
+    axis.text.x = element_text(angle = 25, hjust = 1),
+    legend.position = "top"
+  )
+
+predicted_observed_plot
+
+ggsave(
+  file.path(output_dir, "predicted_vs_observed_mortality_2020_2025.png"),
+  predicted_observed_plot,
+  width = 12,
+  height = 7,
+  dpi = 180
+)
+```
+
+## Mortality by exact RETRASCORE points
+
+As in the article, scores above 13 are pooled because individual high scores
+contain few patients.
+
+```{r plot-mortality-exact-score}
+score_levels_below_14 <- sort(unique(
+  analysis_cohort$retrascore[
+    !is.na(analysis_cohort$retrascore) & analysis_cohort$retrascore < 14
+  ]
+))
+score_levels <- c(as.character(score_levels_below_14), "14+")
+analysis_cohort$score_display_group <- factor(
+  analysis_cohort$score_display_group,
+  levels = score_levels,
+  ordered = TRUE
+)
+
+mortality_by_score <- analysis_cohort %>%
+  filter(!is.na(mortalidad_30d), !is.na(score_display_group)) %>%
+  group_by(period, score_display_group, .drop = FALSE) %>%
+  summarise(
+    Patients = n(),
+    Deaths = sum(mortalidad_30d),
+    mortality_pct = 100 * mean(mortalidad_30d),
+    .groups = "drop"
+  ) %>%
+  filter(Patients > 0)
+
+utils::write.csv(
+  mortality_by_score,
+  file.path(output_dir, "mortality_by_exact_retrascore.csv"),
+  row.names = FALSE,
+  fileEncoding = "UTF-8"
+)
+
+mortality_score_plot <- ggplot(
+  mortality_by_score,
+  aes(
+    x = score_display_group,
+    y = mortality_pct,
+    colour = period,
+    group = period
+  )
+) +
+  geom_line(linewidth = 0.9) +
+  geom_point(aes(size = Patients), alpha = 0.85) +
+  scale_colour_manual(values = c("#377EB8", "#E6550D")) +
+  scale_y_continuous(
+    limits = c(0, 100),
+    breaks = seq(0, 100, 20)
+  ) +
+  labs(
+    title = "Observed mortality by RETRASCORE points",
+    subtitle = "Scores of 14 or more are grouped as 14+",
+    x = "RETRASCORE points",
+    y = "Observed 30-day mortality (%)",
+    colour = "Cohort",
+    size = "Patients"
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(
+    panel.grid.minor = element_blank(),
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    axis.title.x = element_text(margin = margin(t = 12)),
+    legend.position = "top"
+  )
+
+mortality_score_plot
+
+ggsave(
+  file.path(output_dir, "mortality_by_exact_retrascore.png"),
+  mortality_score_plot,
+  width = 12,
+  height = 6.5,
+  dpi = 180
+)
+```
+
+# Reproducibility notes
+
+- The published coefficients, intercept, integer points, and risk categories
+  are applied unchanged in both cohorts.
+- The new cohort begins in 2020 and ends at the last non-future year available
+  in the RDS (`r latest_new_year`).
+- The historical comparison uses all patients from 2015-2019; it is not split
+  again into the article's derivation and internal-validation subsets because
+  the requested comparison is between eras.
+- Missing predictors are not imputed and are not assigned zero points.
+- Mortality percentages use only patients with a known 30-day outcome.
+- Scores of 14 or more are combined in the exact-score graph, matching the
+  article's handling of sparse high scores.
+
+# Source
+
+Servia L, et al. *Development of a new score for early mortality prediction in
+trauma ICU patients: RETRASCORE*. Critical Care. 2021;25:420.
+doi:10.1186/s13054-021-03845-6.
+
+```{r session-info}
+sessionInfo()
+```

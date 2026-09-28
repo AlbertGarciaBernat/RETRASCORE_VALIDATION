@@ -370,6 +370,39 @@ cat("Categoria superior utilizada: 14+ puntos\n")
 cat("Anos observados:", paste(sort(unique(stats::na.omit(resultado_paciente$ano))), collapse = ", "), "\n")
 ```
 
+## Mortalidad estimada por grupo de RETRASCORE
+
+La mortalidad estimada es la media de las probabilidades individuales
+calculadas mediante la ecuacion logistica original de RETRASCORE. La mortalidad
+observada se calcula entre los pacientes con desenlace a 30 dias conocido.
+
+```{r tabla-mortalidad-por-grupo, echo=FALSE}
+tabla_mortalidad_grupo <- do.call(
+  rbind,
+  lapply(levels(resultado_paciente$retrascore_grupo), function(grupo) {
+    seleccion <- !is.na(resultado_paciente$retrascore_grupo) &
+      resultado_paciente$retrascore_grupo == grupo
+    desenlace <- resultado_paciente$muerte_30d[seleccion]
+    probabilidad <- resultado_paciente$probabilidad_muerte[seleccion]
+    data.frame(
+      RETRASCORE = grupo,
+      Pacientes = sum(seleccion),
+      `Mortalidad estimada (%)` = 100 * mean(probabilidad, na.rm = TRUE),
+      `Mortalidad observada (%)` = 100 * mean(desenlace == 1, na.rm = TRUE),
+      check.names = FALSE
+    )
+  })
+)
+
+row.names(tabla_mortalidad_grupo) <- NULL
+knitr::kable(
+  tabla_mortalidad_grupo,
+  digits = c(0, 0, 2, 2),
+  align = c("r", "r", "r", "r"),
+  caption = "Mortalidad estimada y observada por grupo de RETRASCORE"
+)
+```
+
 ## 6.1. Mortalidad observada por RETRASCORE y ano
 
 Cada celda representa la mortalidad observada a 30 dias entre los pacientes con
