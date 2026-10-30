@@ -38,7 +38,7 @@ candidatas_paper <- c(
 )
 variables_regresion <- c("mortalidad_30d", "año_trauma", candidatas_paper)
 cohorte_paper <- cohorte_retrascore %>%
-  filter(año_trauma >= 2015, año_trauma <= 2019)
+  filter(año_trauma >= 2015, año_trauma <= 2017)
 casos_completos_paper <- complete.cases(cohorte_paper[variables_regresion])
 cohorte_analitica_paper <- cohorte_paper[casos_completos_paper, ]
 

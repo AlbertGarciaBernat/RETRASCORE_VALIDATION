@@ -1,0 +1,971 @@
+---
+title: "RETRASCORE con regiones AIS"
+subtitle: "Derivación 2015-2019 y validación temporal 2020-2025"
+date: "`r format(Sys.Date(), '%Y-%m-%d')`"
+output:
+  html_document:
+    toc: true
+    toc_depth: 3
+    number_sections: true
+    self_contained: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo = TRUE, warning = FALSE, message = FALSE,
+  fig.width = 10, fig.height = 6, dpi = 120
+)
+try(Sys.setlocale("LC_CTYPE", "English_United States.utf8"), silent = TRUE)
+
+paquetes <- c("dplyr", "ggplot2", "MASS", "pROC")
+faltantes <- paquetes[
+  !vapply(paquetes, requireNamespace, logical(1), quietly = TRUE)
+]
+if (length(faltantes)) {
+  stop("Instale estos paquetes antes de ejecutar el informe: ",
+       paste(faltantes, collapse = ", "))
+}
+
+library(dplyr)
+library(ggplot2)
+
+archivo_entrada <- "retrauci_regiones_ais_completas.csv"
+directorio_salida <- "outputs_retrascore_regiones_ais"
+dir.create(directorio_salida, showWarnings = FALSE, recursive = TRUE)
+```
+
+# Diseño del análisis
+
+Se reconstruyen las variables candidatas del estudio RETRASCORE directamente
+desde el nuevo CSV. Las seis variables `mais1`--`mais6` no se utilizan. En su
+lugar se calcula el AIS máximo de cada una de las nueve regiones anatómicas a
+partir de `lesion_X_region_ais` y `lesion_X_gravedad`; cada región entra en el
+modelo como lesión grave (`AIS >= 3`), siguiendo la dicotomización anatómica
+empleada en el análisis previo.
+
+El modelo completo se ajusta únicamente en 2015--2019. A continuación se aplica
+selección stepwise bidireccional por AIC, se reajusta la regresión logística en
+la misma cohorte y se crean puntos enteros mediante `round(2 x beta)`. Los
+puntos y la ecuación que convierte la suma en probabilidad quedan fijados antes
+de evaluar 2020--2025.
+
+# Carga del CSV y reconstrucción de variables
+
+```{r cargar-y-preparar-datos}
+if (!file.exists(archivo_entrada)) {
+  stop("No se encuentra ", archivo_entrada, ".")
+}
+
+# Se lee todo como texto para no alterar identificadores ni códigos.
+df <- read.csv2(
+  archivo_entrada,
+  stringsAsFactors = FALSE,
+  check.names = FALSE,
+  colClasses = "character",
+  na.strings = NULL
+)
+
+limpiar_texto <- function(x) {
+  x <- tolower(trimws(as.character(x)))
+  x[x %in% c("", "na", "nas")] <- NA_character_
+  x
+}
+
+convertir_numero <- function(x) {
+  x <- trimws(as.character(x))
+  x[x %in% c("", "NA", "NAS")] <- NA_character_
+  suppressWarnings(as.numeric(gsub(",", ".", x)))
+}
+
+convertir_fecha <- function(x) {
+  x <- trimws(as.character(x))
+  x[x %in% c("", "NA", "NAS")] <- NA_character_
+  resultado <- as.Date(rep(NA_character_, length(x)))
+  for (formato in c("%d/%m/%Y", "%Y-%m-%d", "%d-%m-%Y")) {
+    pendiente <- is.na(resultado) & !is.na(x)
+    resultado[pendiente] <- as.Date(x[pendiente], format = formato)
+  }
+  resultado
+}
+
+columnas_necesarias <- c(
+  "historia", "registro", "hospital", "fecha_trauma", "fecha_alta_uci",
+  "fecha_alta_hospital", "fecha_exitus", "evolucion_uci",
+  "evolucion_hospitalaria", "genero", "edad", "antiagregado",
+  "dicumarinicos", "acod", "atencion_prehospitalaria",
+  "iot_prehospitalaria", "tipo_trauma", "mecanismo", "intencionalidad",
+  "pupilas_ingreso", "gcs_total_introducido", "situacion_hemodinamica",
+  "adrs", "coagulopatia", "vmec_dico", "hemorragia_masiva"
+)
+faltan_columnas <- setdiff(columnas_necesarias, names(df))
+if (length(faltan_columnas)) {
+  stop("Faltan columnas necesarias: ", paste(faltan_columnas, collapse = ", "))
+}
+
+fecha_trauma <- convertir_fecha(df$fecha_trauma)
+fecha_alta_uci <- convertir_fecha(df$fecha_alta_uci)
+fecha_alta_hospital <- convertir_fecha(df$fecha_alta_hospital)
+fecha_exitus <- convertir_fecha(df$fecha_exitus)
+anio_trauma <- as.integer(format(fecha_trauma, "%Y"))
+
+evolucion_uci <- limpiar_texto(df$evolucion_uci)
+evolucion_hospital <- limpiar_texto(df$evolucion_hospitalaria)
+muerte_uci <- evolucion_uci %in% c("exitus", "exitus y donacion")
+muerte_hospital <- evolucion_hospital %in% c("exitus", "exitus y donacion")
+
+mortalidad_intrahospitalaria <- case_when(
+  muerte_uci | muerte_hospital ~ 1L,
+  evolucion_hospital == "alta" ~ 0L,
+  TRUE ~ NA_integer_
+)
+
+fecha_muerte <- as.Date(rep(NA_character_, nrow(df)))
+fecha_muerte[muerte_uci] <- fecha_alta_uci[muerte_uci]
+fecha_muerte[muerte_hospital] <- fecha_alta_hospital[muerte_hospital]
+usar_fecha_exitus <- mortalidad_intrahospitalaria == 1L &
+  is.na(fecha_muerte) & !is.na(fecha_exitus)
+usar_fecha_exitus[is.na(usar_fecha_exitus)] <- FALSE
+fecha_muerte[usar_fecha_exitus] <- fecha_exitus[usar_fecha_exitus]
+
+dias_hasta_muerte <- as.numeric(fecha_muerte - fecha_trauma)
+fecha_muerte_valida <- !is.na(dias_hasta_muerte) & dias_hasta_muerte >= 0
+mortalidad_30d <- case_when(
+  mortalidad_intrahospitalaria == 0L ~ 0L,
+  mortalidad_intrahospitalaria == 1L &
+    fecha_muerte_valida & dias_hasta_muerte <= 30 ~ 1L,
+  mortalidad_intrahospitalaria == 1L &
+    fecha_muerte_valida & dias_hasta_muerte > 30 ~ 0L,
+  TRUE ~ NA_integer_
+)
+
+genero <- limpiar_texto(df$genero)
+genero_masculino <- case_when(
+  genero == "masculino" ~ 1L,
+  genero == "femenino" ~ 0L,
+  TRUE ~ NA_integer_
+)
+
+edad <- convertir_numero(df$edad)
+edad_categoria <- cut(
+  edad,
+  breaks = c(-Inf, 49, 65, 75, Inf),
+  labels = c("<50", "50-65", "66-75", ">75"),
+  right = TRUE
+)
+
+antiagregado <- limpiar_texto(df$antiagregado)
+dicumarinicos <- limpiar_texto(df$dicumarinicos)
+acod <- limpiar_texto(df$acod)
+precoag <- case_when(
+  antiagregado == "si" | dicumarinicos == "si" | acod == "si" ~ 1L,
+  antiagregado == "no" & dicumarinicos == "no" & acod == "no" ~ 0L,
+  TRUE ~ NA_integer_
+)
+
+atencion_ph <- limpiar_texto(df$atencion_prehospitalaria)
+atencion_prehospitalaria_medica <- case_when(
+  atencion_ph %in% c("uvi movil", "helicoptero") ~ 1L,
+  atencion_ph %in% c(
+    "no medicalizada", "sin atencion prehospitalaria",
+    "soporte vital enfermeria"
+  ) ~ 0L,
+  TRUE ~ NA_integer_
+)
+
+iot_ph <- limpiar_texto(df$iot_prehospitalaria)
+iot_prehospitalaria <- case_when(
+  iot_ph %in% c("si", "si, con empleo de dispositivos de apoyo") ~ 1L,
+  iot_ph == "no" ~ 0L,
+  TRUE ~ NA_integer_
+)
+
+tipo_trauma <- limpiar_texto(df$tipo_trauma)
+trauma_penetrante <- case_when(
+  tipo_trauma == "penetrante" ~ 1L,
+  tipo_trauma == "contuso" ~ 0L,
+  TRUE ~ NA_integer_
+)
+
+mecanismo <- limpiar_texto(df$mecanismo)
+mecanismo[mecanismo %in% c("otro", "otros", "desconocido")] <-
+  "otros/desconocido"
+intencionalidad <- limpiar_texto(df$intencionalidad)
+mecanismo_alto_riesgo <- case_when(
+  mecanismo %in% c(
+    "arma de fuego", "atropello", "caida accidental", "otros/desconocido"
+  ) ~ 1L,
+  mecanismo == "precipitacion" &
+    intencionalidad == "intencionado : autolisis" ~ 1L,
+  !is.na(mecanismo) & mecanismo != "precipitacion" ~ 0L,
+  mecanismo == "precipitacion" & !is.na(intencionalidad) ~ 0L,
+  TRUE ~ NA_integer_
+)
+
+pupilas_texto <- limpiar_texto(df$pupilas_ingreso)
+pupilas <- factor(
+  case_when(
+    pupilas_texto == "sin alteraciones" ~ "normal",
+    pupilas_texto == "midriasis unilateral" ~ "midriasis unilateral",
+    pupilas_texto == "midriasis bilatera" ~ "midriasis bilateral",
+    pupilas_texto == "midriasis bilateral" ~ "midriasis bilateral",
+    TRUE ~ NA_character_
+  ),
+  levels = c("normal", "midriasis unilateral", "midriasis bilateral")
+)
+
+gcs <- convertir_numero(df$gcs_total_introducido)
+gcs_menor_igual_8 <- ifelse(is.na(gcs), NA_integer_, as.integer(gcs <= 8))
+
+hemodinamica <- limpiar_texto(df$situacion_hemodinamica)
+fallo_hemodinamico <- case_when(
+  hemodinamica %in% c("shock", "shock refractario") ~ 1L,
+  hemodinamica %in% c("estable", "inestable remonta con volumen") ~ 0L,
+  TRUE ~ NA_integer_
+)
+
+respiratorio <- limpiar_texto(df$adrs)
+fallo_respiratorio <- case_when(
+  respiratorio %in% c("<100", "101-200") ~ 1L,
+  respiratorio %in% c("no", "201 -300", "> 300") ~ 0L,
+  TRUE ~ NA_integer_
+)
+
+coagulopatia_texto <- limpiar_texto(df$coagulopatia)
+coagulopatia_24h <- case_when(
+  coagulopatia_texto == "si" ~ 1L,
+  coagulopatia_texto == "no" ~ 0L,
+  TRUE ~ NA_integer_
+)
+
+vmec <- limpiar_texto(df$vmec_dico)
+ventilacion_mecanica <- case_when(
+  vmec == "si" ~ 1L,
+  vmec == "no" ~ 0L,
+  TRUE ~ NA_integer_
+)
+
+hemorragia <- limpiar_texto(df$hemorragia_masiva)
+hemorragia_masiva <- case_when(
+  hemorragia == "si" ~ 1L,
+  hemorragia == "no" ~ 0L,
+  TRUE ~ NA_integer_
+)
+```
+
+# AIS máximo por las nueve regiones
+
+```{r construir-ais-regional}
+columnas_region <- grep(
+  "^lesion_[0-9]+_region_ais$", names(df), value = TRUE
+)
+indices_region <- as.integer(sub(
+  "^lesion_([0-9]+)_region_ais$", "\\1", columnas_region
+))
+columnas_region <- columnas_region[order(indices_region)]
+columnas_gravedad <- sub("_region_ais$", "_gravedad", columnas_region)
+
+if (length(columnas_region) != 32L ||
+    any(!columnas_gravedad %in% names(df))) {
+  stop("No se han encontrado las 32 parejas región/gravedad esperadas.")
+}
+
+matriz_region <- sapply(df[columnas_region], convertir_numero)
+matriz_gravedad <- sapply(df[columnas_gravedad], convertir_numero)
+matriz_region[!(matriz_region %in% 1:9)] <- NA_real_
+matriz_gravedad[!(matriz_gravedad %in% 1:6)] <- NA_real_
+
+nombres_regiones <- c(
+  "craneo", "cara", "cuello", "torax", "abdomen",
+  "columna_vertebral", "extremidades_superiores",
+  "extremidades_inferiores", "piel_partes_blandas"
+)
+etiquetas_regiones <- c(
+  "Craneo", "Cara", "Cuello", "Torax", "Abdomen",
+  "Columna vertebral", "Extremidades superiores",
+  "Extremidades inferiores", "Piel y partes blandas"
+)
+
+ais_regional <- matrix(
+  0, nrow = nrow(df), ncol = 9,
+  dimnames = list(NULL, paste0("ais_", nombres_regiones))
+)
+gravedad_incompleta <- matrix(FALSE, nrow = nrow(df), ncol = 9)
+
+for (codigo_region in 1:9) {
+  pertenece <- matriz_region == codigo_region
+  pertenece[is.na(pertenece)] <- FALSE
+  hay_region <- rowSums(pertenece) > 0
+  hay_gravedad_ausente <- rowSums(pertenece & is.na(matriz_gravedad)) > 0
+
+  maximo <- rep(0, nrow(df))
+  for (j in seq_len(ncol(matriz_region))) {
+    valor <- ifelse(pertenece[, j], matriz_gravedad[, j], 0)
+    valor[is.na(valor)] <- 0
+    maximo <- pmax(maximo, valor)
+  }
+  maximo[hay_region & hay_gravedad_ausente] <- NA_real_
+  ais_regional[, codigo_region] <- maximo
+  gravedad_incompleta[, codigo_region] <- hay_region & hay_gravedad_ausente
+}
+
+ais_regional <- as.data.frame(ais_regional)
+ais_grave_regional <- as.data.frame(lapply(
+  ais_regional,
+  function(x) ifelse(is.na(x), NA_integer_, as.integer(x >= 3))
+))
+names(ais_grave_regional) <- paste0("ais3_", nombres_regiones)
+
+resumen_ais_regional <- data.frame(
+  codigo = 1:9,
+  region = etiquetas_regiones,
+  pacientes_con_lesion = vapply(
+    ais_regional, function(x) sum(x > 0, na.rm = TRUE), numeric(1)
+  ),
+  pacientes_con_AIS_3_o_mas = vapply(
+    ais_regional, function(x) sum(x >= 3, na.rm = TRUE), numeric(1)
+  ),
+  pacientes_con_gravedad_incompleta = colSums(gravedad_incompleta),
+  row.names = NULL
+)
+
+utils::write.csv(
+  resumen_ais_regional,
+  file.path(directorio_salida, "resumen_regiones_ais.csv"),
+  row.names = FALSE,
+  fileEncoding = "UTF-8"
+)
+knitr::kable(
+  resumen_ais_regional,
+  caption = "Reconstrucción del AIS máximo por región"
+)
+```
+
+# Cohorte analítica y variables candidatas
+
+```{r definir-cohortes}
+cohorte <- data.frame(
+  id_fila = seq_len(nrow(df)),
+  historia = df$historia,
+  registro = df$registro,
+  hospital = df$hospital,
+  anio_trauma = anio_trauma,
+  mortalidad_intrahospitalaria = mortalidad_intrahospitalaria,
+  mortalidad_30d = mortalidad_30d,
+  genero_masculino = genero_masculino,
+  edad_categoria = factor(
+    edad_categoria, levels = c("<50", "50-65", "66-75", ">75")
+  ),
+  precoag = precoag,
+  atencion_prehospitalaria_medica = atencion_prehospitalaria_medica,
+  iot_prehospitalaria = iot_prehospitalaria,
+  trauma_penetrante = trauma_penetrante,
+  mecanismo_alto_riesgo = mecanismo_alto_riesgo,
+  pupilas = pupilas,
+  gcs_menor_igual_8 = gcs_menor_igual_8,
+  ais_grave_regional,
+  fallo_hemodinamico = fallo_hemodinamico,
+  fallo_respiratorio = fallo_respiratorio,
+  coagulopatia_24h = coagulopatia_24h,
+  ventilacion_mecanica = ventilacion_mecanica,
+  hemorragia_masiva = hemorragia_masiva,
+  check.names = FALSE
+)
+
+# Las variables no anatómicas son las mismas candidatas del estudio. Las seis
+# variables MAIS se sustituyen por las nueve regiones reconstruidas.
+variables_candidatas <- c(
+  "edad_categoria", "genero_masculino", "precoag",
+  "atencion_prehospitalaria_medica", "iot_prehospitalaria",
+  "trauma_penetrante", "mecanismo_alto_riesgo", "pupilas",
+  "gcs_menor_igual_8",
+  names(ais_grave_regional),
+  "fallo_hemodinamico", "fallo_respiratorio", "coagulopatia_24h",
+  "ventilacion_mecanica", "hemorragia_masiva"
+)
+
+cohorte_elegible <- cohorte %>%
+  filter(
+    !is.na(mortalidad_intrahospitalaria),
+    !is.na(anio_trauma),
+    anio_trauma >= 2015,
+    anio_trauma <= 2025
+  ) %>%
+  mutate(
+    id_analisis = row_number(),
+    periodo = factor(
+      ifelse(anio_trauma <= 2019, "Derivacion 2015-2019", "Validacion 2020-2025"),
+      levels = c("Derivacion 2015-2019", "Validacion 2020-2025")
+    )
+  )
+
+derivacion_total <- cohorte_elegible %>%
+  filter(periodo == "Derivacion 2015-2019")
+validacion_total <- cohorte_elegible %>%
+  filter(periodo == "Validacion 2020-2025")
+
+variables_modelo_completo <- c("mortalidad_30d", variables_candidatas)
+derivacion <- derivacion_total[
+  complete.cases(
+    derivacion_total[, variables_modelo_completo, drop = FALSE]
+  ), , drop = FALSE
+]
+
+if (!nrow(derivacion) || length(unique(derivacion$mortalidad_30d)) != 2L) {
+  stop("La cohorte de derivación no permite ajustar el modelo.")
+}
+
+flujo_cohortes <- data.frame(
+  cohorte = c("Derivacion 2015-2019", "Validacion 2020-2025"),
+  elegibles = c(nrow(derivacion_total), nrow(validacion_total)),
+  outcome_30d_conocido = c(
+    sum(!is.na(derivacion_total$mortalidad_30d)),
+    sum(!is.na(validacion_total$mortalidad_30d))
+  ),
+  completos_para_todas_las_candidatas = c(
+    sum(complete.cases(
+      derivacion_total[, variables_modelo_completo, drop = FALSE]
+    )),
+    sum(complete.cases(
+      validacion_total[, variables_modelo_completo, drop = FALSE]
+    ))
+  )
+)
+
+knitr::kable(
+  data.frame(variable_candidata = variables_candidatas),
+  caption = paste(length(variables_candidatas), "variables candidatas")
+)
+knitr::kable(flujo_cohortes, caption = "Flujo de las cohortes")
+```
+
+# Selección stepwise y regresión logística
+
+```{r stepwise-y-regresion}
+formula_completa <- reformulate(
+  variables_candidatas, response = "mortalidad_30d"
+)
+modelo_completo <- glm(
+  formula_completa,
+  data = derivacion,
+  family = binomial(link = "logit"),
+  na.action = na.fail
+)
+if (!modelo_completo$converged || anyNA(coef(modelo_completo))) {
+  stop("El modelo completo no converge o contiene coeficientes no estimables.")
+}
+
+modelo_stepwise <- MASS::stepAIC(
+  modelo_completo,
+  direction = "both",
+  trace = FALSE
+)
+if (!modelo_stepwise$converged || anyNA(coef(modelo_stepwise))) {
+  stop("El modelo stepwise no converge o contiene coeficientes no estimables.")
+}
+
+variables_seleccionadas <- attr(terms(modelo_stepwise), "term.labels")
+if (!length(variables_seleccionadas)) {
+  stop("La selección produjo un modelo con solo intercepto.")
+}
+
+ruta_stepwise <- modelo_stepwise$anova
+names(ruta_stepwise) <- make.names(names(ruta_stepwise), unique = TRUE)
+utils::write.csv(
+  ruta_stepwise,
+  file.path(directorio_salida, "ruta_stepwise.csv"),
+  row.names = FALSE,
+  fileEncoding = "UTF-8"
+)
+
+resumen_seleccion <- data.frame(
+  N_derivacion = nrow(derivacion),
+  muertes_30d = sum(derivacion$mortalidad_30d),
+  variables_candidatas = length(variables_candidatas),
+  variables_seleccionadas = length(variables_seleccionadas),
+  AIC_modelo_completo = AIC(modelo_completo),
+  AIC_modelo_stepwise = AIC(modelo_stepwise)
+)
+
+coeficientes <- summary(modelo_stepwise)$coefficients
+tabla_coeficientes <- data.frame(
+  termino = rownames(coeficientes),
+  beta = coeficientes[, "Estimate"],
+  error_estandar = coeficientes[, "Std. Error"],
+  p = coeficientes[, "Pr(>|z|)"],
+  OR = exp(coeficientes[, "Estimate"]),
+  IC95_inferior = exp(
+    coeficientes[, "Estimate"] - 1.96 * coeficientes[, "Std. Error"]
+  ),
+  IC95_superior = exp(
+    coeficientes[, "Estimate"] + 1.96 * coeficientes[, "Std. Error"]
+  ),
+  row.names = NULL
+)
+
+utils::write.csv(
+  tabla_coeficientes,
+  file.path(directorio_salida, "coeficientes_regresion_logistica.csv"),
+  row.names = FALSE,
+  fileEncoding = "UTF-8"
+)
+
+knitr::kable(resumen_seleccion, digits = 3, caption = "Resumen de la selección")
+knitr::kable(
+  data.frame(variable_seleccionada = variables_seleccionadas),
+  caption = "Variables retenidas por stepwise bidireccional"
+)
+knitr::kable(ruta_stepwise, digits = 3, caption = "Ruta de selección por AIC")
+knitr::kable(
+  tabla_coeficientes,
+  digits = 4,
+  caption = "Regresión logística final ajustada en 2015-2019"
+)
+```
+
+## Variables incluidas durante la selección
+
+```{r grafico-inclusion-stepwise, fig.width=11, fig.height=9}
+acciones_stepwise <- trimws(as.character(ruta_stepwise$Step))
+acciones_stepwise[is.na(acciones_stepwise)] <- ""
+
+incluidas_en_paso <- vector("list", nrow(ruta_stepwise))
+variables_actuales <- variables_candidatas
+incluidas_en_paso[[1]] <- variables_actuales
+
+if (nrow(ruta_stepwise) > 1L) {
+  for (indice_paso in 2:nrow(ruta_stepwise)) {
+    accion <- acciones_stepwise[indice_paso]
+    nombre_variable <- trimws(sub("^[+-]\\s*", "", accion))
+    if (startsWith(accion, "-")) {
+      variables_actuales <- setdiff(variables_actuales, nombre_variable)
+    } else if (startsWith(accion, "+")) {
+      variables_actuales <- union(variables_actuales, nombre_variable)
+    }
+    incluidas_en_paso[[indice_paso]] <- variables_actuales
+  }
+}
+
+etiquetas_paso <- ifelse(
+  seq_len(nrow(ruta_stepwise)) == 1L,
+  "Modelo completo inicial",
+  acciones_stepwise
+)
+etiquetas_aic <- paste0(
+  seq_len(nrow(ruta_stepwise)) - 1L,
+  "\nAIC = ", formatC(ruta_stepwise$AIC, digits = 1, format = "f")
+)
+
+inclusion_stepwise <- do.call(
+  rbind,
+  lapply(seq_len(nrow(ruta_stepwise)), function(indice_paso) {
+    data.frame(
+      indice_paso = indice_paso - 1L,
+      paso = etiquetas_paso[indice_paso],
+      AIC = ruta_stepwise$AIC[indice_paso],
+      variable = variables_candidatas,
+      incluida = variables_candidatas %in%
+        incluidas_en_paso[[indice_paso]],
+      stringsAsFactors = FALSE
+    )
+  })
+)
+inclusion_stepwise$variable <- factor(
+  inclusion_stepwise$variable,
+  levels = rev(variables_candidatas)
+)
+
+grafico_inclusion_stepwise <- ggplot(
+  inclusion_stepwise,
+  aes(x = indice_paso, y = variable, fill = incluida)
+) +
+  geom_tile(color = "white", linewidth = 0.35) +
+  scale_fill_manual(
+    values = c(`FALSE` = "grey92", `TRUE` = "#2166AC"),
+    labels = c(`FALSE` = "Excluida", `TRUE` = "Incluida"),
+    name = NULL
+  ) +
+  scale_x_continuous(
+    breaks = seq_len(nrow(ruta_stepwise)) - 1L,
+    labels = etiquetas_aic,
+    expand = c(0, 0)
+  ) +
+  labs(
+    title = paste(
+      "Variables incluidas durante la selección stepwise bidireccional"
+    ),
+    subtitle = paste(
+      "Azul = incluida; la calidad del modelo se evalúa mediante AIC",
+      "(menor es mejor)"
+    ),
+    x = "Paso y AIC del modelo",
+    y = NULL
+  ) +
+  theme_minimal(base_size = 11) +
+  theme(
+    panel.grid = element_blank(),
+    axis.text.x = element_text(size = 9),
+    legend.position = "top",
+    plot.title.position = "plot"
+  )
+
+print(grafico_inclusion_stepwise)
+ggsave(
+  file.path(directorio_salida, "stepwise_variable_inclusion.png"),
+  grafico_inclusion_stepwise,
+  width = 11,
+  height = max(7, 0.30 * length(variables_candidatas) + 2),
+  dpi = 300
+)
+utils::write.csv(
+  inclusion_stepwise,
+  file.path(directorio_salida, "stepwise_variable_inclusion.csv"),
+  row.names = FALSE,
+  fileEncoding = "UTF-8"
+)
+```
+
+# Creación de la puntuación RETRASCORE
+
+```{r crear-puntuacion}
+redondear_entero <- function(x) sign(x) * floor(abs(x) + 0.5)
+
+betas <- coef(modelo_stepwise)[-1]
+puntos <- setNames(
+  as.integer(redondear_entero(2 * betas)),
+  names(betas)
+)
+
+tabla_puntos <- data.frame(
+  termino = names(betas),
+  beta = as.numeric(betas),
+  beta_por_2 = 2 * as.numeric(betas),
+  puntos_retrascore = as.integer(puntos),
+  row.names = NULL
+)
+
+filas_referencia <- lapply(names(modelo_stepwise$xlevels), function(variable) {
+  data.frame(
+    termino = paste0(variable, modelo_stepwise$xlevels[[variable]][1],
+                     " (referencia)"),
+    beta = 0,
+    beta_por_2 = 0,
+    puntos_retrascore = 0L
+  )
+})
+tabla_puntos_mostrar <- if (length(filas_referencia)) {
+  rbind(tabla_puntos, do.call(rbind, filas_referencia))
+} else tabla_puntos
+
+formula_puntuacion <- reformulate(variables_seleccionadas)
+calcular_puntuacion <- function(datos) {
+  matriz <- model.matrix(formula_puntuacion, data = datos)[, -1, drop = FALSE]
+  columnas_faltantes <- setdiff(names(puntos), colnames(matriz))
+  if (length(columnas_faltantes)) {
+    stop("Faltan términos para calcular la puntuación: ",
+         paste(columnas_faltantes, collapse = ", "))
+  }
+  matriz <- matriz[, names(puntos), drop = FALSE]
+  as.integer(drop(matriz %*% puntos))
+}
+
+disponible_puntuacion <- complete.cases(
+  cohorte_elegible[, variables_seleccionadas, drop = FALSE]
+)
+cohorte_elegible$retrascore_regional <- NA_integer_
+cohorte_elegible$retrascore_regional[disponible_puntuacion] <-
+  calcular_puntuacion(
+    cohorte_elegible[disponible_puntuacion, , drop = FALSE]
+  )
+
+# La relación puntos-probabilidad se estima solo en los casos de derivación
+# utilizados por la regresión y después queda fijada.
+derivacion$retrascore_regional <- calcular_puntuacion(derivacion)
+modelo_probabilidad_puntos <- glm(
+  mortalidad_30d ~ retrascore_regional,
+  data = derivacion,
+  family = binomial(link = "logit")
+)
+if (!modelo_probabilidad_puntos$converged) {
+  stop("No converge la ecuación que convierte puntos en probabilidad.")
+}
+
+cohorte_elegible$probabilidad_mortalidad <- NA_real_
+cohorte_elegible$probabilidad_mortalidad[disponible_puntuacion] <- predict(
+  modelo_probabilidad_puntos,
+  newdata = data.frame(
+    retrascore_regional = cohorte_elegible$retrascore_regional[
+      disponible_puntuacion
+    ]
+  ),
+  type = "response"
+)
+
+utils::write.csv(
+  tabla_puntos_mostrar,
+  file.path(directorio_salida, "puntos_retrascore_regiones_ais.csv"),
+  row.names = FALSE,
+  fileEncoding = "UTF-8"
+)
+
+ecuacion_puntuacion <- data.frame(
+  componente = c("Intercepto", "Coeficiente por punto"),
+  estimacion = unname(coef(modelo_probabilidad_puntos))
+)
+
+knitr::kable(
+  tabla_puntos_mostrar,
+  digits = c(0, 4, 4, 0),
+  caption = "Puntos derivados en 2015-2019 y fijados para ambas cohortes"
+)
+knitr::kable(
+  ecuacion_puntuacion,
+  digits = 5,
+  caption = "Ecuación de mortalidad estimada en 2015-2019"
+)
+```
+
+Para una puntuación total (S), la probabilidad de mortalidad a 30 días es:
+
+\[
+P(Y=1) = \frac{1}{1 + \exp[-(a+bS)]}.
+\]
+
+# Validación temporal en 2020-2025
+
+```{r validacion-temporal}
+evaluacion_derivacion <- cohorte_elegible %>%
+  filter(
+    id_analisis %in% derivacion$id_analisis,
+    !is.na(mortalidad_30d),
+    !is.na(probabilidad_mortalidad)
+  )
+evaluacion_validacion <- cohorte_elegible %>%
+  filter(
+    periodo == "Validacion 2020-2025",
+    !is.na(mortalidad_30d),
+    !is.na(probabilidad_mortalidad)
+  )
+
+evaluar_modelo <- function(datos, nombre_cohorte) {
+  outcome <- datos$mortalidad_30d
+  probabilidad <- datos$probabilidad_mortalidad
+  roc <- pROC::roc(
+    outcome, probabilidad,
+    levels = c(0, 1), direction = "<", quiet = TRUE
+  )
+  ic_auc <- as.numeric(pROC::ci.auc(roc, method = "delong"))
+  lp <- qlogis(pmin(pmax(probabilidad, 1e-12), 1 - 1e-12))
+  modelo_intercepto <- glm(
+    outcome ~ 1, offset = lp, family = binomial(link = "logit")
+  )
+  modelo_pendiente <- glm(
+    outcome ~ lp, family = binomial(link = "logit")
+  )
+  data.frame(
+    cohorte = nombre_cohorte,
+    n = length(outcome),
+    muertes_30d = sum(outcome),
+    mortalidad_observada_pct = 100 * mean(outcome),
+    mortalidad_predicha_pct = 100 * mean(probabilidad),
+    AUROC = as.numeric(pROC::auc(roc)),
+    AUROC_IC95_inferior = ic_auc[1],
+    AUROC_IC95_superior = ic_auc[3],
+    Brier = mean((outcome - probabilidad)^2),
+    intercepto_calibracion = unname(coef(modelo_intercepto)[1]),
+    pendiente_calibracion = unname(coef(modelo_pendiente)[2]),
+    row.names = NULL
+  )
+}
+
+metricas <- rbind(
+  evaluar_modelo(evaluacion_derivacion, "Derivacion 2015-2019"),
+  evaluar_modelo(evaluacion_validacion, "Validacion 2020-2025")
+)
+metricas_mostrar <- metricas
+metricas_mostrar$`AUROC (IC95%)` <- sprintf(
+  "%.3f (%.3f-%.3f)",
+  metricas_mostrar$AUROC,
+  metricas_mostrar$AUROC_IC95_inferior,
+  metricas_mostrar$AUROC_IC95_superior
+)
+metricas_mostrar <- metricas_mostrar[, c(
+  "cohorte", "n", "muertes_30d", "mortalidad_observada_pct",
+  "mortalidad_predicha_pct", "AUROC (IC95%)", "Brier",
+  "intercepto_calibracion", "pendiente_calibracion"
+)]
+
+utils::write.csv(
+  metricas,
+  file.path(directorio_salida, "metricas_derivacion_validacion.csv"),
+  row.names = FALSE,
+  fileEncoding = "UTF-8"
+)
+knitr::kable(
+  metricas_mostrar,
+  digits = c(0, 0, 0, 2, 2, 0, 3, 3, 3),
+  caption = "Rendimiento de la puntuación fija en ambas cohortes"
+)
+```
+
+## Mortalidad por puntuación
+
+```{r mortalidad-por-puntuacion}
+datos_grafico <- bind_rows(
+  evaluacion_derivacion %>% mutate(cohorte = "Derivacion 2015-2019"),
+  evaluacion_validacion %>% mutate(cohorte = "Validacion 2020-2025")
+)
+
+mortalidad_puntuacion <- datos_grafico %>%
+  group_by(cohorte, retrascore_regional) %>%
+  summarise(
+    pacientes = n(),
+    muertes = sum(mortalidad_30d),
+    mortalidad_observada_pct = 100 * mean(mortalidad_30d),
+    mortalidad_predicha_pct = 100 * mean(probabilidad_mortalidad),
+    .groups = "drop"
+  )
+
+utils::write.csv(
+  mortalidad_puntuacion,
+  file.path(directorio_salida, "mortalidad_por_puntuacion.csv"),
+  row.names = FALSE,
+  fileEncoding = "UTF-8"
+)
+
+datos_grafico_largo <- rbind(
+  data.frame(
+    cohorte = mortalidad_puntuacion$cohorte,
+    puntuacion = mortalidad_puntuacion$retrascore_regional,
+    pacientes = mortalidad_puntuacion$pacientes,
+    tipo = "Predicha",
+    mortalidad = mortalidad_puntuacion$mortalidad_predicha_pct
+  ),
+  data.frame(
+    cohorte = mortalidad_puntuacion$cohorte,
+    puntuacion = mortalidad_puntuacion$retrascore_regional,
+    pacientes = mortalidad_puntuacion$pacientes,
+    tipo = "Observada",
+    mortalidad = mortalidad_puntuacion$mortalidad_observada_pct
+  )
+)
+
+grafico_puntuacion <- ggplot(
+  datos_grafico_largo,
+  aes(x = puntuacion, y = mortalidad, colour = tipo)
+) +
+  geom_line(
+    data = subset(datos_grafico_largo, tipo == "Predicha"),
+    linewidth = 1
+  ) +
+  geom_point(
+    data = subset(datos_grafico_largo, tipo == "Observada"),
+    aes(size = pacientes), alpha = 0.8
+  ) +
+  facet_wrap(~ cohorte) +
+  scale_colour_manual(values = c("Predicha" = "#756BB1", "Observada" = "#E6550D")) +
+  scale_y_continuous(limits = c(0, 100), breaks = seq(0, 100, 20)) +
+  labs(
+    title = "Mortalidad observada y predicha por puntuación",
+    subtitle = "Puntos y ecuación desarrollados exclusivamente en 2015-2019",
+    x = "RETRASCORE con regiones AIS",
+    y = "Mortalidad a 30 días (%)",
+    colour = NULL,
+    size = "Pacientes"
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(panel.grid.minor = element_blank(), legend.position = "top")
+
+grafico_puntuacion
+ggsave(
+  file.path(directorio_salida, "mortalidad_por_puntuacion.png"),
+  grafico_puntuacion,
+  width = 11, height = 6.5, dpi = 180
+)
+```
+
+# Archivos de resultados y modelo reutilizable
+
+```{r guardar-resultados}
+puntuaciones_pacientes <- cohorte_elegible %>%
+  select(
+    id_fila, historia, registro, hospital, anio_trauma,
+    cohorte = periodo, mortalidad_30d,
+    retrascore_regional, probabilidad_mortalidad
+  ) %>%
+  mutate(
+    puntuacion_disponible = !is.na(retrascore_regional),
+    .after = mortalidad_30d
+  )
+
+utils::write.csv(
+  puntuaciones_pacientes,
+  file.path(directorio_salida, "puntuaciones_y_predicciones_pacientes.csv"),
+  row.names = FALSE,
+  na = "",
+  fileEncoding = "UTF-8"
+)
+
+paquete_modelo <- list(
+  archivo_fuente = archivo_entrada,
+  anios_derivacion = 2015:2019,
+  anios_validacion = 2020:2025,
+  definicion_anatomica = "AIS maximo por region, dicotomizado como AIS >= 3",
+  regiones_ais = setNames(1:9, nombres_regiones),
+  variables_candidatas = variables_candidatas,
+  variables_seleccionadas = variables_seleccionadas,
+  formula_completa = formula_completa,
+  modelo_completo = modelo_completo,
+  ruta_stepwise = ruta_stepwise,
+  modelo_logistico = modelo_stepwise,
+  puntos = puntos,
+  modelo_probabilidad_puntos = modelo_probabilidad_puntos
+)
+saveRDS(
+  paquete_modelo,
+  file.path(directorio_salida, "modelo_retrascore_regiones_ais.rds")
+)
+
+archivos_guardados <- data.frame(
+  archivo = c(
+    "resumen_regiones_ais.csv",
+    "ruta_stepwise.csv",
+    "stepwise_variable_inclusion.csv",
+    "stepwise_variable_inclusion.png",
+    "coeficientes_regresion_logistica.csv",
+    "puntos_retrascore_regiones_ais.csv",
+    "metricas_derivacion_validacion.csv",
+    "mortalidad_por_puntuacion.csv",
+    "puntuaciones_y_predicciones_pacientes.csv",
+    "mortalidad_por_puntuacion.png",
+    "modelo_retrascore_regiones_ais.rds"
+  )
+)
+knitr::kable(archivos_guardados, caption = "Resultados guardados")
+```
+
+# Notas de reproducibilidad
+
+- Las nueve regiones AIS se reconstruyen desde las columnas de lesión del CSV;
+  no se utilizan `mais1`--`mais6`.
+- Si existe una lesión asignada a una región pero su gravedad está ausente o
+  fuera de 1--6, el AIS regional se conserva como ausente.
+- La ausencia de lesiones documentadas en una región se codifica como AIS 0.
+- El modelo completo y todos los modelos stepwise utilizan exactamente los
+  mismos casos completos de 2015--2019.
+- La cohorte 2020--2025 no interviene en la selección, los coeficientes, los
+  puntos ni la ecuación de probabilidad.
+- Los intervalos de confianza posteriores a stepwise son descriptivos y no
+  incorporan la incertidumbre de la selección de variables.
+
+# Fuentes
+
+Serviá L, et al. *Development of a new score for early mortality prediction in
+trauma ICU patients: RETRASCORE*. Critical Care. 2021;25:420.
+doi:10.1186/s13054-021-03845-6.
+
+La selección se implementa mediante `MASS::stepAIC()` con dirección
+bidireccional y criterio AIC.
+
+```{r session-info}
+sessionInfo()
+```

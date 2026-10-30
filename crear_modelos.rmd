@@ -1,0 +1,341 @@
+---
+title: "Creacion de modelos de regresion logistica"
+subtitle: "Cohorte RETRASCORE"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    number_sections: true
+---
+
+```{r configuracion, include=FALSE}
+# Permite utilizar identificadores como años_estudio en Windows y en Linux.
+locales_utf8 <- c(
+  "Spanish_Spain.utf8",
+  "English_United States.utf8",
+  "C.UTF-8"
+)
+for (locale_utf8 in locales_utf8) {
+  locale_activa <- suppressWarnings(Sys.setlocale("LC_CTYPE", locale_utf8))
+  if (nzchar(locale_activa)) break
+}
+
+knitr::opts_chunk$set(
+  echo = TRUE,
+  message = FALSE,
+  warning = TRUE,
+  fig.align = "center"
+)
+options(scipen = 999)
+```
+
+# Seleccion del analisis
+
+Edite solamente este bloque para cambiar el desenlace, los años incluidos o
+los predictores. Una variable entra en el modelo cuando su linea **no** empieza
+por `#`. Para retirarla, anada `#` al principio de la linea.
+
+```{r seleccion}
+# Desenlace binario (0 = no, 1 = si)
+variable_resultado <- "mortalidad_30d"
+
+# Nombre de la columna temporal. La secuencia Unicode evita problemas de
+# codificacion de la letra ene con tilde en algunas instalaciones de Windows.
+variable_año <- "a\u00f1o_trauma"
+
+# Años que se analizaran. Ejemplos:
+# años_estudio <- 2015:2019
+# años_estudio <- c(2015, 2017, 2020)
+años_estudio <- 2020:2025
+
+# Predictores del modelo.
+# Estan incluidas las 40 variables de cohorte_retrascore.rds.
+# AVISO: identificadores, variables posteriores al ingreso y otros desenlaces
+# suelen ser inadecuados como predictores. Se conservan en la lista para que
+# todas las columnas queden visibles, pero estan comentados.
+predictores <- c(
+  # "id_fila",                           # Identificador
+  # "historia",                          # Identificador de alta cardinalidad
+  # "registro",                          # Identificador
+  # "hospital",                          # Centro (numerico en la cohorte)
+  # "a\u00f1o_trauma",                   # Se usa para filtrar los años
+  # "mortalidad_intrahospitalaria",       # Otro desenlace: posible fuga de informacion
+  # "mortalidad_30d",                     # Desenlace seleccionado por defecto
+  # "dias_hasta_muerte",                  # Variable posterior al desenlace
+  # "dias_estancia_uci",                  # Variable posterior al ingreso
+  # "probabilidad_muerte_triss",          # Prediccion de otro modelo
+  #"genero_masculino",
+  # "edad",
+  "edad_categoria",
+  "precoag",
+  # "atencion_prehospitalaria_medica",
+  "iot_prehospitalaria",
+  # "trauma_penetrante",
+  # "tipo_lesion",
+  # "mecanismo_agrupado",
+  #"mecanismo_alto_riesgo",
+  "pupilas",
+  # "gcs_total",
+  "gcs_menor_igual_8",
+  # "ais_cabeza",
+  "mais_cabeza",
+  # "ais_torax",
+  "mais_torax",
+  # "ais_abdomen",
+  "mais_abdomen",
+  # "ais_ext_superior",
+  # "ais_ext_inferior",
+   "mais_ext_inferior",
+  # "ais_externo",
+  "mais_externo",
+  "fallo_hemodinamico",
+  "fallo_respiratorio",
+  "coagulopatia_24h",
+  "ventilacion_mecanica",
+  "hemorragia_masiva"
+)
+
+# Interacciones. Use dos puntos entre las variables. Las variables pueden
+# permanecer comentadas arriba si quiere incluir solamente la interaccion,
+# sin sus efectos principales por separado.
+# Para desactivar una interaccion, comente su linea con #.
+interacciones <- c(
+  #"mais_torax:fallo_hemodinamico"
+)
+```
+
+# Carga y comprobaciones
+
+```{r carga-datos}
+archivo_cohorte <- "cohorte_retrascore.rds"
+
+if (!file.exists(archivo_cohorte)) {
+  stop("No se encontro cohorte_retrascore.rds en el directorio de trabajo.")
+}
+
+cohorte_retrascore <- readRDS(archivo_cohorte)
+
+if (!is.data.frame(cohorte_retrascore)) {
+  stop("cohorte_retrascore.rds no contiene un data.frame.")
+}
+
+variables_en_interacciones <- if (length(interacciones) == 0L) {
+  character(0)
+} else {
+  all.vars(reformulate(interacciones))
+}
+
+variables_necesarias <- unique(c(
+  variable_año, variable_resultado, predictores, variables_en_interacciones
+))
+variables_ausentes <- setdiff(variables_necesarias, names(cohorte_retrascore))
+
+if (length(variables_ausentes) > 0L) {
+  stop(
+    "No se encontraron estas variables en la cohorte: ",
+    paste(variables_ausentes, collapse = ", ")
+  )
+}
+
+if (length(predictores) == 0L && length(interacciones) == 0L) {
+  stop("Seleccione al menos un predictor o una interaccion.")
+}
+
+if (anyDuplicated(predictores)) {
+  stop("Hay predictores repetidos: ",
+       paste(unique(predictores[duplicated(predictores)]), collapse = ", "))
+}
+
+if (anyDuplicated(interacciones)) {
+  stop("Hay interacciones repetidas: ",
+       paste(unique(interacciones[duplicated(interacciones)]), collapse = ", "))
+}
+
+variables_reservadas <- intersect(
+  c(predictores, variables_en_interacciones),
+  c(variable_resultado, variable_año)
+)
+if (length(variables_reservadas) > 0L) {
+  stop(
+    "Retire de 'predictores' las variables reservadas: ",
+    paste(variables_reservadas, collapse = ", ")
+  )
+}
+
+if (length(años_estudio) == 0L || anyNA(años_estudio)) {
+  stop("'años_estudio' debe contener al menos un año y no puede incluir NA.")
+}
+
+años_disponibles <- sort(unique(
+  cohorte_retrascore[[variable_año]][
+    !is.na(cohorte_retrascore[[variable_año]])
+  ]
+))
+años_no_disponibles <- setdiff(años_estudio, años_disponibles)
+
+if (length(años_no_disponibles) > 0L) {
+  warning(
+    "No hay registros para estos años seleccionados: ",
+    paste(años_no_disponibles, collapse = ", ")
+  )
+}
+
+datos_años <- cohorte_retrascore[
+  cohorte_retrascore[[variable_año]] %in% años_estudio,
+  variables_necesarias,
+  drop = FALSE
+]
+
+# glm usa casos completos. Se hace de forma explicita para poder informar de
+# cuantos registros entran realmente en el modelo.
+casos_completos <- complete.cases(
+  datos_años[,
+    c(variable_resultado, predictores, variables_en_interacciones),
+    drop = FALSE
+  ]
+)
+datos_modelo <- droplevels(datos_años[casos_completos, , drop = FALSE])
+
+if (nrow(datos_modelo) == 0L) {
+  stop("No quedan casos completos con la seleccion actual.")
+}
+
+valores_resultado <- sort(unique(datos_modelo[[variable_resultado]]))
+if (!identical(as.numeric(valores_resultado), c(0, 1))) {
+  stop(
+    "El desenlace debe contener los valores 0 y 1. Valores encontrados: ",
+    paste(valores_resultado, collapse = ", ")
+  )
+}
+```
+
+## Resumen de la seleccion
+
+```{r resumen-seleccion, echo=FALSE}
+resumen_seleccion <- data.frame(
+  Caracteristica = c(
+    "Desenlace",
+    "Años seleccionados",
+    "Registros en los años seleccionados",
+    "Casos completos incluidos",
+    "Registros excluidos por datos ausentes",
+    "Eventos incluidos",
+    "Predictores seleccionados",
+    "Interacciones seleccionadas"
+  ),
+  Valor = c(
+    variable_resultado,
+    paste(sort(unique(años_estudio)), collapse = ", "),
+    nrow(datos_años),
+    nrow(datos_modelo),
+    sum(!casos_completos),
+    sum(datos_modelo[[variable_resultado]] == 1),
+    length(predictores),
+    if (length(interacciones) == 0L) {
+      "Ninguna"
+    } else {
+      paste(interacciones, collapse = ", ")
+    }
+  ),
+  check.names = FALSE
+)
+
+knitr::kable(resumen_seleccion, align = c("l", "l"))
+```
+
+# Regresion logistica
+
+```{r modelo}
+formula_modelo <- reformulate(
+  termlabels = c(predictores, interacciones),
+  response = variable_resultado
+)
+
+modelo_logistico <- glm(
+  formula = formula_modelo,
+  data = datos_modelo,
+  family = binomial(link = "logit"),
+  na.action = na.fail
+)
+
+if (!isTRUE(modelo_logistico$converged)) {
+  warning("El modelo no ha convergido. Revise la seleccion de variables.")
+}
+
+formula_modelo
+```
+
+# Betas, odds ratios e intervalos de confianza
+
+Los intervalos de confianza del 95% que se muestran son intervalos de Wald.
+En las variables categoricas aparece una fila por cada nivel comparado con la
+categoria de referencia.
+
+```{r tabla-resultados, echo=FALSE}
+coeficientes <- summary(modelo_logistico)$coefficients
+
+beta <- coeficientes[, "Estimate"]
+error_estandar <- coeficientes[, "Std. Error"]
+limite_beta_inferior <- beta - qnorm(0.975) * error_estandar
+limite_beta_superior <- beta + qnorm(0.975) * error_estandar
+
+tabla_resultados <- data.frame(
+  Variable = ifelse(
+    rownames(coeficientes) == "(Intercept)",
+    "Intercepto",
+    rownames(coeficientes)
+  ),
+  Beta = beta,
+  OR = exp(beta),
+  `IC 95% inferior` = exp(limite_beta_inferior),
+  `IC 95% superior` = exp(limite_beta_superior),
+  `Valor p` = coeficientes[, "Pr(>|z|)"],
+  check.names = FALSE,
+  row.names = NULL
+)
+
+knitr::kable(
+  tabla_resultados,
+  digits = c(NA, 3, 3, 3, 3, 4),
+  align = c("l", "r", "r", "r", "r", "r")
+)
+```
+
+# Discriminacion del modelo
+
+El AUC se calcula sobre los mismos casos utilizados para ajustar el modelo.
+Por tanto, representa la discriminacion aparente y puede ser optimista si no
+se valida en una muestra independiente o mediante remuestreo.
+
+```{r auc-modelo, echo=FALSE}
+if (!requireNamespace("pROC", quietly = TRUE)) {
+  stop("Se necesita el paquete pROC para calcular el AUC y su IC del 95%.")
+}
+
+probabilidades_modelo <- predict(modelo_logistico, type = "response")
+
+curva_roc <- pROC::roc(
+  response = datos_modelo[[variable_resultado]],
+  predictor = probabilidades_modelo,
+  levels = c(0, 1),
+  direction = "<",
+  quiet = TRUE
+)
+
+ic_auc <- as.numeric(pROC::ci.auc(curva_roc, method = "delong"))
+
+tabla_auc <- data.frame(
+  Medida = "AUC (discriminacion aparente)",
+  AUC = as.numeric(pROC::auc(curva_roc)),
+  `IC 95% inferior` = ic_auc[1],
+  `IC 95% superior` = ic_auc[3],
+  check.names = FALSE
+)
+
+knitr::kable(
+  tabla_auc,
+  digits = c(NA, 3, 3, 3),
+  align = c("l", "r", "r", "r")
+)
+```
+

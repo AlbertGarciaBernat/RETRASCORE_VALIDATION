@@ -10,7 +10,7 @@
 
 
 
-<meta name="date" content="2026-09-23" />
+<meta name="date" content="2026-10-05" />
 
 <title>RETRASCORE temporal validation: 2020-2025</title>
 
@@ -352,7 +352,7 @@ display: none;
 <h1 class="title toc-ignore">RETRASCORE temporal validation:
 2020-2025</h1>
 <h3 class="subtitle">Comparison with the 2015-2019 cohort</h3>
-<h4 class="date">2026-09-23</h4>
+<h4 class="date">2026-10-05</h4>
 
 </div>
 
@@ -378,6 +378,8 @@ points</a></li>
 <li><a href="#reproducibility-notes" id="toc-reproducibility-notes"><span class="toc-section-number">6</span>
 Reproducibility notes</a></li>
 <li><a href="#source" id="toc-source"><span class="toc-section-number">7</span> Source</a></li>
+<li><a href="#cohort-specific-coefficients-retrascore-points-odds-ratios-and-confidence-intervals" id="toc-cohort-specific-coefficients-retrascore-points-odds-ratios-and-confidence-intervals"><span class="toc-section-number">8</span> Cohort-specific coefficients,
+RETRASCORE points, odds ratios and confidence intervals</a></li>
 </ul>
 </div>
 
@@ -1352,6 +1354,356 @@ prediction in trauma ICU patients: RETRASCORE</em>. Critical Care.
 ## [33] vctrs_0.7.1        evaluate_1.0.5     glue_1.8.0         farver_2.1.2      
 ## [37] ragg_1.5.1         rmarkdown_2.30     tools_4.5.2        pkgconfig_2.0.3   
 ## [41] htmltools_0.5.9</code></pre>
+</div>
+<div id="cohort-specific-coefficients-retrascore-points-odds-ratios-and-confidence-intervals" class="section level1" number="8">
+<h1><span class="header-section-number">8</span> Cohort-specific
+coefficients, RETRASCORE points, odds ratios and confidence
+intervals</h1>
+<p>The following two models use the same 13 RETRASCORE predictors but
+are fitted separately in the historical derivation cohort and the
+temporal validation cohort. RETRASCORE points are calculated as in the
+original score (<code>round(2 x beta)</code>). The 95% confidence
+interval shown is the Wald interval for the odds ratio. Reference
+categories have beta 0, zero points and OR 1 by definition, so an
+independent confidence interval is not applicable. The validation-cohort
+refit is descriptive and does not replace the primary validation of the
+unchanged published equation reported above.</p>
+<table>
+<caption>Cohort-specific RETRASCORE model: derivation 2015-2019
+(complete cases N=8239)</caption>
+<colgroup>
+<col width="25%" />
+<col width="23%" />
+<col width="6%" />
+<col width="16%" />
+<col width="6%" />
+<col width="21%" />
+</colgroup>
+<thead>
+<tr class="header">
+<th align="left"></th>
+<th align="left">Variable</th>
+<th align="right">Beta</th>
+<th align="right">RETRASCORE points</th>
+<th align="right">OR</th>
+<th align="left">OR (95% CI)</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td align="left">1</td>
+<td align="left">Age &lt;50 (reference)</td>
+<td align="right">0.000</td>
+<td align="right">0</td>
+<td align="right">1.000</td>
+<td align="left">Reference</td>
+</tr>
+<tr class="even">
+<td align="left">edad_categoria50-65</td>
+<td align="left">Age 50-65</td>
+<td align="right">0.932</td>
+<td align="right">2</td>
+<td align="right">2.539</td>
+<td align="left">2.539 (1.976-3.264)</td>
+</tr>
+<tr class="odd">
+<td align="left">edad_categoria66-75</td>
+<td align="left">Age 66-75</td>
+<td align="right">1.632</td>
+<td align="right">3</td>
+<td align="right">5.114</td>
+<td align="left">5.114 (3.825-6.838)</td>
+</tr>
+<tr class="even">
+<td align="left">edad_categoria&gt;75</td>
+<td align="left">Age &gt;75</td>
+<td align="right">2.517</td>
+<td align="right">5</td>
+<td align="right">12.394</td>
+<td align="left">12.394 (9.266-16.579)</td>
+</tr>
+<tr class="odd">
+<td align="left">precoag</td>
+<td align="left">PRECOAG</td>
+<td align="right">0.399</td>
+<td align="right">1</td>
+<td align="right">1.490</td>
+<td align="left">1.490 (1.191-1.863)</td>
+</tr>
+<tr class="even">
+<td align="left">iot_prehospitalaria</td>
+<td align="left">Pre-hospital intubation</td>
+<td align="right">0.260</td>
+<td align="right">1</td>
+<td align="right">1.297</td>
+<td align="left">1.297 (1.033-1.628)</td>
+</tr>
+<tr class="odd">
+<td align="left">mecanismo_alto_riesgo</td>
+<td align="left">High-risk mechanism</td>
+<td align="right">0.568</td>
+<td align="right">1</td>
+<td align="right">1.765</td>
+<td align="left">1.765 (1.446-2.154)</td>
+</tr>
+<tr class="even">
+<td align="left">2</td>
+<td align="left">Normal pupils (reference)</td>
+<td align="right">0.000</td>
+<td align="right">0</td>
+<td align="right">1.000</td>
+<td align="left">Reference</td>
+</tr>
+<tr class="odd">
+<td align="left">pupilasmidriasis unilateral</td>
+<td align="left">Unilateral mydriasis</td>
+<td align="right">1.108</td>
+<td align="right">2</td>
+<td align="right">3.027</td>
+<td align="left">3.027 (2.375-3.857)</td>
+</tr>
+<tr class="even">
+<td align="left">pupilasmidriasis bilateral</td>
+<td align="left">Bilateral mydriasis</td>
+<td align="right">3.262</td>
+<td align="right">7</td>
+<td align="right">26.099</td>
+<td align="left">26.099 (18.128-37.576)</td>
+</tr>
+<tr class="odd">
+<td align="left">gcs_menor_igual_8</td>
+<td align="left">GCS &lt;=8</td>
+<td align="right">1.057</td>
+<td align="right">2</td>
+<td align="right">2.876</td>
+<td align="left">2.876 (2.271-3.643)</td>
+</tr>
+<tr class="even">
+<td align="left">mais_cabeza</td>
+<td align="left">MAIS head</td>
+<td align="right">0.858</td>
+<td align="right">2</td>
+<td align="right">2.358</td>
+<td align="left">2.358 (1.888-2.945)</td>
+</tr>
+<tr class="odd">
+<td align="left">mais_torax</td>
+<td align="left">MAIS thorax</td>
+<td align="right">-0.246</td>
+<td align="right">0</td>
+<td align="right">0.782</td>
+<td align="left">0.782 (0.635-0.963)</td>
+</tr>
+<tr class="even">
+<td align="left">fallo_hemodinamico</td>
+<td align="left">Haemodynamic failure</td>
+<td align="right">1.096</td>
+<td align="right">2</td>
+<td align="right">2.991</td>
+<td align="left">2.991 (2.412-3.710)</td>
+</tr>
+<tr class="odd">
+<td align="left">fallo_respiratorio</td>
+<td align="left">Respiratory failure</td>
+<td align="right">0.715</td>
+<td align="right">1</td>
+<td align="right">2.044</td>
+<td align="left">2.044 (1.621-2.576)</td>
+</tr>
+<tr class="even">
+<td align="left">coagulopatia_24h</td>
+<td align="left">Coagulopathy at 24 h</td>
+<td align="right">0.619</td>
+<td align="right">1</td>
+<td align="right">1.857</td>
+<td align="left">1.857 (1.467-2.350)</td>
+</tr>
+<tr class="odd">
+<td align="left">ventilacion_mecanica</td>
+<td align="left">Mechanical ventilation</td>
+<td align="right">0.475</td>
+<td align="right">1</td>
+<td align="right">1.607</td>
+<td align="left">1.607 (1.277-2.023)</td>
+</tr>
+<tr class="even">
+<td align="left">hemorragia_masiva</td>
+<td align="left">Massive haemorrhage</td>
+<td align="right">0.749</td>
+<td align="right">1</td>
+<td align="right">2.114</td>
+<td align="left">2.114 (1.538-2.905)</td>
+</tr>
+</tbody>
+</table>
+<table>
+<caption>Cohort-specific RETRASCORE model: validation 2020-2025
+(complete cases N=8450)</caption>
+<colgroup>
+<col width="25%" />
+<col width="23%" />
+<col width="6%" />
+<col width="16%" />
+<col width="6%" />
+<col width="21%" />
+</colgroup>
+<thead>
+<tr class="header">
+<th align="left"></th>
+<th align="left">Variable</th>
+<th align="right">Beta</th>
+<th align="right">RETRASCORE points</th>
+<th align="right">OR</th>
+<th align="left">OR (95% CI)</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td align="left">1</td>
+<td align="left">Age &lt;50 (reference)</td>
+<td align="right">0.000</td>
+<td align="right">0</td>
+<td align="right">1.000</td>
+<td align="left">Reference</td>
+</tr>
+<tr class="even">
+<td align="left">edad_categoria50-65</td>
+<td align="left">Age 50-65</td>
+<td align="right">0.956</td>
+<td align="right">2</td>
+<td align="right">2.601</td>
+<td align="left">2.601 (2.037-3.321)</td>
+</tr>
+<tr class="odd">
+<td align="left">edad_categoria66-75</td>
+<td align="left">Age 66-75</td>
+<td align="right">1.683</td>
+<td align="right">3</td>
+<td align="right">5.383</td>
+<td align="left">5.383 (4.077-7.107)</td>
+</tr>
+<tr class="even">
+<td align="left">edad_categoria&gt;75</td>
+<td align="left">Age &gt;75</td>
+<td align="right">2.568</td>
+<td align="right">5</td>
+<td align="right">13.037</td>
+<td align="left">13.037 (9.669-17.579)</td>
+</tr>
+<tr class="odd">
+<td align="left">precoag</td>
+<td align="left">PRECOAG</td>
+<td align="right">0.695</td>
+<td align="right">1</td>
+<td align="right">2.003</td>
+<td align="left">2.003 (1.587-2.527)</td>
+</tr>
+<tr class="even">
+<td align="left">iot_prehospitalaria</td>
+<td align="left">Pre-hospital intubation</td>
+<td align="right">0.312</td>
+<td align="right">1</td>
+<td align="right">1.366</td>
+<td align="left">1.366 (1.081-1.727)</td>
+</tr>
+<tr class="odd">
+<td align="left">mecanismo_alto_riesgo</td>
+<td align="left">High-risk mechanism</td>
+<td align="right">0.443</td>
+<td align="right">1</td>
+<td align="right">1.557</td>
+<td align="left">1.557 (1.285-1.887)</td>
+</tr>
+<tr class="even">
+<td align="left">2</td>
+<td align="left">Normal pupils (reference)</td>
+<td align="right">0.000</td>
+<td align="right">0</td>
+<td align="right">1.000</td>
+<td align="left">Reference</td>
+</tr>
+<tr class="odd">
+<td align="left">pupilasmidriasis unilateral</td>
+<td align="left">Unilateral mydriasis</td>
+<td align="right">1.134</td>
+<td align="right">2</td>
+<td align="right">3.108</td>
+<td align="left">3.108 (2.386-4.048)</td>
+</tr>
+<tr class="even">
+<td align="left">pupilasmidriasis bilateral</td>
+<td align="left">Bilateral mydriasis</td>
+<td align="right">3.413</td>
+<td align="right">7</td>
+<td align="right">30.367</td>
+<td align="left">30.367 (21.188-43.522)</td>
+</tr>
+<tr class="odd">
+<td align="left">gcs_menor_igual_8</td>
+<td align="left">GCS &lt;=8</td>
+<td align="right">0.866</td>
+<td align="right">2</td>
+<td align="right">2.378</td>
+<td align="left">2.378 (1.864-3.034)</td>
+</tr>
+<tr class="even">
+<td align="left">mais_cabeza</td>
+<td align="left">MAIS head</td>
+<td align="right">0.893</td>
+<td align="right">2</td>
+<td align="right">2.442</td>
+<td align="left">2.442 (1.965-3.034)</td>
+</tr>
+<tr class="odd">
+<td align="left">mais_torax</td>
+<td align="left">MAIS thorax</td>
+<td align="right">-0.076</td>
+<td align="right">0</td>
+<td align="right">0.927</td>
+<td align="left">0.927 (0.757-1.136)</td>
+</tr>
+<tr class="even">
+<td align="left">fallo_hemodinamico</td>
+<td align="left">Haemodynamic failure</td>
+<td align="right">1.143</td>
+<td align="right">2</td>
+<td align="right">3.135</td>
+<td align="left">3.135 (2.534-3.878)</td>
+</tr>
+<tr class="odd">
+<td align="left">fallo_respiratorio</td>
+<td align="left">Respiratory failure</td>
+<td align="right">0.679</td>
+<td align="right">1</td>
+<td align="right">1.972</td>
+<td align="left">1.972 (1.564-2.488)</td>
+</tr>
+<tr class="even">
+<td align="left">coagulopatia_24h</td>
+<td align="left">Coagulopathy at 24 h</td>
+<td align="right">0.563</td>
+<td align="right">1</td>
+<td align="right">1.756</td>
+<td align="left">1.756 (1.387-2.222)</td>
+</tr>
+<tr class="odd">
+<td align="left">ventilacion_mecanica</td>
+<td align="left">Mechanical ventilation</td>
+<td align="right">0.561</td>
+<td align="right">1</td>
+<td align="right">1.752</td>
+<td align="left">1.752 (1.396-2.199)</td>
+</tr>
+<tr class="even">
+<td align="left">hemorragia_masiva</td>
+<td align="left">Massive haemorrhage</td>
+<td align="right">0.762</td>
+<td align="right">2</td>
+<td align="right">2.143</td>
+<td align="left">2.143 (1.548-2.966)</td>
+</tr>
+</tbody>
+</table>
 </div>
 
 

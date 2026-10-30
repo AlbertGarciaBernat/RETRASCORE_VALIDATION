@@ -1,0 +1,676 @@
+---
+title: "Lesiones por área anatómica y gravedad AIS"
+subtitle: "Número de pacientes y mortalidad a 30 días"
+output:
+  html_document:
+    toc: true
+    toc_depth: 2
+    df_print: default
+date: "`r format(Sys.Date(), '%Y-%m-%d')`"
+editor_options:
+  chunk_output_type: inline
+---
+
+```{r setup, include=FALSE}
+# Garantiza que Windows conserve correctamente los nombres con acentos.
+try(Sys.setlocale("LC_CTYPE", "Spanish_Spain.utf8"), silent = TRUE)
+
+if (!requireNamespace("dplyr", quietly = TRUE)) {
+  stop("Se necesita el paquete dplyr para ejecutar este análisis.")
+}
+
+library(dplyr)
+
+archivo_entrada <- "retrauci_regiones_ais_completas.csv"
+directorio_salida <- "outputs_correlation_ais"
+archivo_resumen <- file.path(
+  directorio_salida, "mortalidad_30d_por_area_gravedad.csv"
+)
+archivo_paciente_area <- file.path(
+  directorio_salida, "lesiones_por_paciente_area.csv"
+)
+archivo_mortalidad_parejas <- file.path(
+  directorio_salida, "mortalidad_todas_parejas_areas.csv"
+)
+archivo_prueba_interaccion <- file.path(
+  directorio_salida, "prueba_interaccion_mortalidad_todas_parejas.csv"
+)
+archivo_detalle_parejas <- file.path(
+  directorio_salida, "detalle_todas_parejas_areas.csv"
+)
+
+dir.create(directorio_salida, showWarnings = FALSE, recursive = TRUE)
+```
+
+# Definición del análisis
+
+Las lesiones se reconstruyen a partir de las 32 parejas de columnas
+`lesion_X_region_ais` y `lesion_X_gravedad`. Para evitar contar varias veces al
+mismo paciente dentro de un área, se utiliza la gravedad AIS máxima documentada
+en cada una de las nueve áreas anatómicas. Esta gravedad se agrupa en tres
+categorías mutuamente excluyentes: AIS 1--2, AIS 3--4 y AIS 5--6.
+
+La mortalidad corresponde a fallecimiento dentro de los 30 días posteriores al
+traumatismo. El denominador del porcentaje es el número de pacientes del grupo
+con desenlace a 30 días conocido. Además se conserva el número total de
+pacientes del grupo para hacer explícitos los desenlaces ausentes.
+
+# Carga de datos y mortalidad a 30 días
+
+```{r cargar-datos, include=FALSE}
+if (!file.exists(archivo_entrada)) {
+  stop("No se encuentra el archivo ", archivo_entrada, ".")
+}
+
+# Se lee todo como texto para conservar identificadores y códigos exactamente.
+datos <- read.csv2(
+  archivo_entrada,
+  stringsAsFactors = FALSE,
+  check.names = FALSE,
+  colClasses = "character",
+  na.strings = NULL,
+  fileEncoding = "UTF-8"
+)
+
+limpiar_texto <- function(x) {
+  x <- tolower(trimws(as.character(x)))
+  x[x %in% c("", "na", "nas")] <- NA_character_
+  x
+}
+
+convertir_numero <- function(x) {
+  x <- trimws(as.character(x))
+  x[x %in% c("", "NA", "NAS")] <- NA_character_
+  suppressWarnings(as.numeric(gsub(",", ".", x)))
+}
+
+convertir_fecha <- function(x) {
+  x <- trimws(as.character(x))
+  x[x %in% c("", "NA", "NAS")] <- NA_character_
+  resultado <- as.Date(rep(NA_character_, length(x)))
+  for (formato in c("%d/%m/%Y", "%Y-%m-%d", "%d-%m-%Y")) {
+    pendiente <- is.na(resultado) & !is.na(x)
+    resultado[pendiente] <- as.Date(x[pendiente], format = formato)
+  }
+  resultado
+}
+
+columnas_mortalidad <- c(
+  "fecha_trauma", "fecha_alta_uci", "fecha_alta_hospital", "fecha_exitus",
+  "evolucion_uci", "evolucion_hospitalaria"
+)
+faltan_mortalidad <- setdiff(columnas_mortalidad, names(datos))
+if (length(faltan_mortalidad)) {
+  stop(
+    "Faltan columnas necesarias para calcular la mortalidad: ",
+    paste(faltan_mortalidad, collapse = ", ")
+  )
+}
+
+fecha_trauma <- convertir_fecha(datos$fecha_trauma)
+fecha_alta_uci <- convertir_fecha(datos$fecha_alta_uci)
+fecha_alta_hospital <- convertir_fecha(datos$fecha_alta_hospital)
+fecha_exitus <- convertir_fecha(datos$fecha_exitus)
+
+evolucion_uci <- limpiar_texto(datos$evolucion_uci)
+evolucion_hospital <- limpiar_texto(datos$evolucion_hospitalaria)
+muerte_uci <- evolucion_uci %in% c("exitus", "exitus y donacion")
+muerte_hospital <- evolucion_hospital %in% c(
+  "exitus", "exitus y donacion"
+)
+
+mortalidad_intrahospitalaria <- case_when(
+  muerte_uci | muerte_hospital ~ 1L,
+  evolucion_hospital == "alta" ~ 0L,
+  TRUE ~ NA_integer_
+)
+
+fecha_muerte <- as.Date(rep(NA_character_, nrow(datos)))
+fecha_muerte[muerte_uci] <- fecha_alta_uci[muerte_uci]
+fecha_muerte[muerte_hospital] <- fecha_alta_hospital[muerte_hospital]
+usar_fecha_exitus <- mortalidad_intrahospitalaria == 1L &
+  is.na(fecha_muerte) & !is.na(fecha_exitus)
+usar_fecha_exitus[is.na(usar_fecha_exitus)] <- FALSE
+fecha_muerte[usar_fecha_exitus] <- fecha_exitus[usar_fecha_exitus]
+
+dias_hasta_muerte <- as.numeric(fecha_muerte - fecha_trauma)
+fecha_muerte_valida <- !is.na(dias_hasta_muerte) & dias_hasta_muerte >= 0
+mortalidad_30d <- case_when(
+  mortalidad_intrahospitalaria == 0L ~ 0L,
+  mortalidad_intrahospitalaria == 1L &
+    fecha_muerte_valida & dias_hasta_muerte <= 30 ~ 1L,
+  mortalidad_intrahospitalaria == 1L &
+    fecha_muerte_valida & dias_hasta_muerte > 30 ~ 0L,
+  TRUE ~ NA_integer_
+)
+```
+
+# Reconstrucción de la gravedad máxima por área
+
+```{r reconstruir-lesiones, include=FALSE}
+columnas_region <- grep(
+  "^lesion_[0-9]+_region_ais$", names(datos), value = TRUE
+)
+indices_lesion <- as.integer(sub(
+  "^lesion_([0-9]+)_region_ais$", "\\1", columnas_region
+))
+columnas_region <- columnas_region[order(indices_lesion)]
+columnas_gravedad <- sub("_region_ais$", "_gravedad", columnas_region)
+
+if (length(columnas_region) != 32L ||
+    any(!columnas_gravedad %in% names(datos))) {
+  stop("No se han encontrado las 32 parejas región/gravedad esperadas.")
+}
+
+matriz_region <- sapply(datos[columnas_region], convertir_numero)
+matriz_gravedad <- sapply(datos[columnas_gravedad], convertir_numero)
+
+region_invalida <- !is.na(matriz_region) & !(matriz_region %in% 1:9)
+gravedad_invalida <- !is.na(matriz_gravedad) & !(matriz_gravedad %in% 1:6)
+matriz_region[region_invalida] <- NA_real_
+matriz_gravedad[gravedad_invalida] <- NA_real_
+
+etiquetas_areas <- c(
+  "Cráneo", "Cara", "Cuello", "Tórax", "Abdomen",
+  "Columna vertebral", "Extremidades superiores",
+  "Extremidades inferiores", "Piel y partes blandas"
+)
+grupos_gravedad <- c("AIS 1-2", "AIS 3-4", "AIS 5-6")
+
+identificadores <- intersect(
+  c("historia", "registro", "hospital"), names(datos)
+)
+lista_paciente_area <- vector("list", length(etiquetas_areas))
+
+for (codigo_area in seq_along(etiquetas_areas)) {
+  pertenece <- matriz_region == codigo_area
+  pertenece[is.na(pertenece)] <- FALSE
+  hay_lesion <- rowSums(pertenece) > 0
+  gravedad_ausente <- rowSums(pertenece & is.na(matriz_gravedad)) > 0
+
+  ais_maximo <- rep(0, nrow(datos))
+  for (j in seq_len(ncol(matriz_region))) {
+    valor <- ifelse(pertenece[, j], matriz_gravedad[, j], 0)
+    valor[is.na(valor)] <- 0
+    ais_maximo <- pmax(ais_maximo, valor)
+  }
+  ais_maximo[!hay_lesion] <- NA_real_
+
+  # Si una lesión del área carece de gravedad, el máximo real es incierto.
+  ais_maximo[hay_lesion & gravedad_ausente] <- NA_real_
+  grupo <- cut(
+    ais_maximo,
+    breaks = c(0, 2, 4, 6),
+    labels = grupos_gravedad,
+    right = TRUE
+  )
+
+  filas <- which(hay_lesion)
+  bloque <- data.frame(
+    id_fila = filas,
+    datos[filas, identificadores, drop = FALSE],
+    codigo_area = codigo_area,
+    area_anatomica = etiquetas_areas[codigo_area],
+    ais_maximo = ais_maximo[filas],
+    grupo_gravedad = factor(
+      as.character(grupo[filas]), levels = grupos_gravedad, ordered = TRUE
+    ),
+    mortalidad_30d = mortalidad_30d[filas],
+    stringsAsFactors = FALSE,
+    check.names = FALSE
+  )
+  lista_paciente_area[[codigo_area]] <- bloque
+}
+
+lesiones_paciente_area <- bind_rows(lista_paciente_area) %>%
+  arrange(id_fila, codigo_area)
+
+stopifnot(
+  !anyDuplicated(lesiones_paciente_area[c("id_fila", "codigo_area")]),
+  all(lesiones_paciente_area$ais_maximo %in% 1:6 |
+        is.na(lesiones_paciente_area$ais_maximo))
+)
+```
+
+# Número de pacientes y mortalidad por grupo
+
+```{r resumir-mortalidad, include=FALSE}
+datos_resumen <- lesiones_paciente_area %>%
+  filter(!is.na(grupo_gravedad)) %>%
+  mutate(
+    area_anatomica = factor(
+      area_anatomica, levels = etiquetas_areas, ordered = TRUE
+    ),
+    grupo_gravedad = factor(
+      grupo_gravedad, levels = grupos_gravedad, ordered = TRUE
+    )
+  ) %>%
+  group_by(area_anatomica, grupo_gravedad, .drop = FALSE) %>%
+  summarise(
+    n_pacientes = n(),
+    n_con_mortalidad_30d = sum(!is.na(mortalidad_30d)),
+    muertes_30d = sum(mortalidad_30d == 1L, na.rm = TRUE),
+    mortalidad_30d_pct = ifelse(
+      n_con_mortalidad_30d > 0,
+      100 * muertes_30d / n_con_mortalidad_30d,
+      NA_real_
+    ),
+    .groups = "drop"
+  ) %>%
+  mutate(
+    codigo_area = match(as.character(area_anatomica), etiquetas_areas),
+    mortalidad_30d_pct = round(mortalidad_30d_pct, 2)
+  ) %>%
+  select(
+    codigo_area, area_anatomica, grupo_gravedad, n_pacientes,
+    n_con_mortalidad_30d, muertes_30d, mortalidad_30d_pct
+  ) %>%
+  arrange(codigo_area, grupo_gravedad)
+
+stopifnot(
+  nrow(datos_resumen) == 27L,
+  all(datos_resumen$muertes_30d <= datos_resumen$n_con_mortalidad_30d),
+  all(datos_resumen$n_con_mortalidad_30d <= datos_resumen$n_pacientes),
+  sum(datos_resumen$n_pacientes) ==
+    sum(!is.na(lesiones_paciente_area$grupo_gravedad))
+)
+
+# CSV2 conserva el separador de punto y coma utilizado por el archivo fuente.
+write.csv2(
+  datos_resumen,
+  archivo_resumen,
+  row.names = FALSE,
+  fileEncoding = "UTF-8",
+  na = ""
+)
+write.csv2(
+  lesiones_paciente_area,
+  archivo_paciente_area,
+  row.names = FALSE,
+  fileEncoding = "UTF-8",
+  na = ""
+)
+
+```
+
+# Tablas para todas las parejas de áreas
+
+Para cada una de las 36 parejas posibles se muestran juntas dos matrices 3 × 3:
+la mortalidad a 30 días con su N conocido y los residuos estandarizados de
+mortalidad. Las muertes esperadas proceden de un modelo logístico con los
+efectos principales de ambas áreas, pero sin su interacción. Un residuo positivo
+indica más muertes observadas de las esperadas y uno negativo, menos. Un
+asterisco identifica las celdas con `|residuo| >= 1,96`.
+
+```{r funciones-parejas, include=FALSE}
+formatear_porcentaje_n <- function(porcentaje, n) {
+  if (is.na(porcentaje)) return(sprintf("NA%% (%d)", n))
+  porcentaje_texto <- sub(
+    ".", ",", sprintf("%0.2f", porcentaje), fixed = TRUE
+  )
+  sprintf("%s%% (%d)", porcentaje_texto, n)
+}
+
+formatear_residuo <- function(x) {
+  if (is.na(x)) return("NA")
+  valor <- sub(".", ",", sprintf("%+.2f", x), fixed = TRUE)
+  if (abs(x) >= 1.96) paste0(valor, " *") else valor
+}
+
+crear_matriz_mostrar <- function(detalle, columna, nombre_filas, nombre_columnas) {
+  resultado <- data.frame(
+    setNames(list(grupos_gravedad), paste0("Gravedad ", nombre_filas)),
+    check.names = FALSE
+  )
+  for (grupo_columna in grupos_gravedad) {
+    resultado[[paste0(nombre_columnas, " ", grupo_columna)]] <-
+      detalle[[columna]][detalle$gravedad_area_2 == grupo_columna]
+  }
+  resultado
+}
+
+calcular_pareja_areas <- function(codigo_area_1, codigo_area_2) {
+  nombre_area_1 <- etiquetas_areas[codigo_area_1]
+  nombre_area_2 <- etiquetas_areas[codigo_area_2]
+
+  datos_area_1 <- lesiones_paciente_area %>%
+    filter(codigo_area == codigo_area_1, !is.na(grupo_gravedad)) %>%
+    transmute(
+      id_fila,
+      gravedad_area_1 = factor(
+        grupo_gravedad, levels = grupos_gravedad, ordered = TRUE
+      ),
+      mortalidad_30d
+    )
+  datos_area_2 <- lesiones_paciente_area %>%
+    filter(codigo_area == codigo_area_2, !is.na(grupo_gravedad)) %>%
+    transmute(
+      id_fila,
+      gravedad_area_2 = factor(
+        grupo_gravedad, levels = grupos_gravedad, ordered = TRUE
+      )
+    )
+  pacientes_pareja <- inner_join(datos_area_1, datos_area_2, by = "id_fila")
+
+  detalle <- pacientes_pareja %>%
+    group_by(gravedad_area_1, gravedad_area_2, .drop = FALSE) %>%
+    summarise(
+      n_pacientes = n(),
+      n_con_mortalidad_30d = sum(!is.na(mortalidad_30d)),
+      muertes_30d = sum(mortalidad_30d == 1L, na.rm = TRUE),
+      mortalidad_30d_pct = ifelse(
+        n_con_mortalidad_30d > 0,
+        100 * muertes_30d / n_con_mortalidad_30d,
+        NA_real_
+      ),
+      .groups = "drop"
+    ) %>%
+    arrange(gravedad_area_1, gravedad_area_2)
+
+  # Modelo de referencia: mortalidad explicada por los dos efectos principales,
+  # sin interacción. Sus predicciones proporcionan las muertes esperadas.
+  filas_modelo <- which(detalle$n_con_mortalidad_30d > 0)
+  detalle_modelo <- droplevels(detalle[filas_modelo, , drop = FALSE])
+  terminos_modelo <- character()
+  if (nlevels(detalle_modelo$gravedad_area_1) > 1L) {
+    terminos_modelo <- c(terminos_modelo, "gravedad_area_1")
+  }
+  if (nlevels(detalle_modelo$gravedad_area_2) > 1L) {
+    terminos_modelo <- c(terminos_modelo, "gravedad_area_2")
+  }
+  formula_modelo <- reformulate(
+    terminos_modelo,
+    response = paste0(
+      "cbind(muertes_30d, ",
+      "n_con_mortalidad_30d - muertes_30d)"
+    )
+  )
+  modelo_mortalidad <- tryCatch(
+    suppressWarnings(glm(
+      formula_modelo,
+      family = binomial(),
+      data = detalle_modelo
+    )),
+    error = function(e) NULL
+  )
+
+  detalle$muertes_esperadas_30d <- NA_real_
+  detalle$residuo_mortalidad_estandarizado <- NA_real_
+  if (!is.null(modelo_mortalidad)) {
+    probabilidad_esperada <- fitted(modelo_mortalidad)
+    muertes_esperadas <-
+      detalle_modelo$n_con_mortalidad_30d * probabilidad_esperada
+    residuos_pearson <- residuals(modelo_mortalidad, type = "pearson")
+    ajuste <- hatvalues(modelo_mortalidad)
+    residuos_estandarizados <- ifelse(
+      1 - ajuste > 1e-8,
+      residuos_pearson / sqrt(1 - ajuste),
+      NA_real_
+    )
+    detalle$muertes_esperadas_30d[filas_modelo] <- muertes_esperadas
+    detalle$residuo_mortalidad_estandarizado[filas_modelo] <-
+      residuos_estandarizados
+  }
+  detalle$celda_significativa <-
+    !is.na(detalle$residuo_mortalidad_estandarizado) &
+    abs(detalle$residuo_mortalidad_estandarizado) >= 1.96
+  detalle$mortalidad_mostrar <- mapply(
+    formatear_porcentaje_n,
+    detalle$mortalidad_30d_pct,
+    detalle$n_con_mortalidad_30d,
+    USE.NAMES = FALSE
+  )
+  detalle$residuo_mostrar <- vapply(
+    detalle$residuo_mortalidad_estandarizado,
+    formatear_residuo,
+    character(1)
+  )
+
+  tabla_mortalidad <- crear_matriz_mostrar(
+    detalle, "mortalidad_mostrar", nombre_area_1, nombre_area_2
+  )
+  tabla_residuos <- crear_matriz_mostrar(
+    detalle, "residuo_mostrar", nombre_area_1, nombre_area_2
+  )
+
+  gl_interaccion <- if (is.null(modelo_mortalidad)) {
+    NA_integer_
+  } else {
+    df.residual(modelo_mortalidad)
+  }
+  desviancia_interaccion <- if (is.null(modelo_mortalidad)) {
+    NA_real_
+  } else {
+    deviance(modelo_mortalidad)
+  }
+  p_interaccion <- if (
+    is.na(gl_interaccion) || gl_interaccion <= 0L
+  ) {
+    NA_real_
+  } else {
+    pchisq(desviancia_interaccion, gl_interaccion, lower.tail = FALSE)
+  }
+  conteos_esperados <- if (is.null(modelo_mortalidad)) {
+    numeric()
+  } else {
+    c(
+      detalle$muertes_esperadas_30d[filas_modelo],
+      detalle_modelo$n_con_mortalidad_30d -
+        detalle$muertes_esperadas_30d[filas_modelo]
+    )
+  }
+
+  prueba_interaccion <- data.frame(
+    codigo_area_1 = codigo_area_1,
+    area_1 = nombre_area_1,
+    codigo_area_2 = codigo_area_2,
+    area_2 = nombre_area_2,
+    n_con_mortalidad_30d = sum(detalle$n_con_mortalidad_30d),
+    desviancia = desviancia_interaccion,
+    grados_libertad = gl_interaccion,
+    p_valor = p_interaccion,
+    conteo_esperado_minimo = if (length(conteos_esperados)) {
+      min(conteos_esperados)
+    } else {
+      NA_real_
+    },
+    conteos_esperados_menor_5 = if (length(conteos_esperados)) {
+      sum(conteos_esperados < 5)
+    } else {
+      NA_integer_
+    },
+    row.names = NULL
+  )
+
+  detalle_exportar <- detalle %>%
+    mutate(
+      codigo_area_1 = codigo_area_1,
+      area_1 = nombre_area_1,
+      codigo_area_2 = codigo_area_2,
+      area_2 = nombre_area_2,
+      .before = 1
+    ) %>%
+    select(-mortalidad_mostrar, -residuo_mostrar)
+
+  list(
+    nombre_area_1 = nombre_area_1,
+    nombre_area_2 = nombre_area_2,
+    tabla_mortalidad = tabla_mortalidad,
+    tabla_residuos = tabla_residuos,
+    prueba_interaccion = prueba_interaccion,
+    detalle = detalle_exportar
+  )
+}
+
+# Genera tablas Markdown nativas para que sean legibles tanto en el editor
+# como en el documento tejido.
+imprimir_tabla_markdown <- function(tabla) {
+  tabla_markdown <- knitr::kable(
+    tabla,
+    format = "pipe",
+    row.names = FALSE,
+    align = rep("l", ncol(tabla))
+  )
+  cat("\n", tabla_markdown, "\n\n", sep = "\n")
+  invisible(NULL)
+}
+
+mostrar_pareja_markdown <- function(resultado) {
+  prueba <- resultado$prueba_interaccion
+  texto_prueba <- if (
+    is.na(prueba$desviancia) || is.na(prueba$grados_libertad) ||
+      prueba$grados_libertad <= 0L
+  ) {
+    "Interacción de mortalidad no estimable por falta de información."
+  } else {
+    sprintf(
+      paste0(
+        "Prueba global de interacción de mortalidad: G² = %.2f; ",
+        "gl = %d; p = %.4f; menor conteo esperado = %.2f; ",
+        "conteos esperados menores de 5 = %d."
+      ),
+      prueba$desviancia, prueba$grados_libertad, prueba$p_valor,
+      prueba$conteo_esperado_minimo,
+      prueba$conteos_esperados_menor_5
+    )
+  }
+
+  cat(
+    "## ", resultado$nombre_area_1, " × ", resultado$nombre_area_2, "\n\n",
+    texto_prueba, "\n\n",
+    "### Mortalidad a 30 días % (N con desenlace conocido)\n",
+    sep = ""
+  )
+  imprimir_tabla_markdown(resultado$tabla_mortalidad)
+
+  cat(paste0(
+    "### Residuos estandarizados de mortalidad ",
+    "(muertes observadas − esperadas)\n"
+  ))
+  imprimir_tabla_markdown(resultado$tabla_residuos)
+  cat(paste0(
+    "\\* |residuo| >= 1,96. Positivo: más muertes de las esperadas; ",
+    "negativo: menos muertes de las esperadas.\n\n"
+  ))
+
+  invisible(NULL)
+}
+
+parejas_codigos <- combn(
+  seq_along(etiquetas_areas), 2, simplify = FALSE
+)
+resultados_parejas <- lapply(
+  parejas_codigos,
+  function(x) calcular_pareja_areas(x[1], x[2])
+)
+
+prueba_interaccion_todas_parejas <- bind_rows(lapply(
+  resultados_parejas, `[[`, "prueba_interaccion"
+))
+detalle_todas_parejas <- bind_rows(lapply(
+  resultados_parejas, `[[`, "detalle"
+))
+mortalidad_todas_parejas <- detalle_todas_parejas %>%
+  select(
+    codigo_area_1, area_1, codigo_area_2, area_2,
+    gravedad_area_1, gravedad_area_2, n_pacientes,
+    n_con_mortalidad_30d, muertes_30d, mortalidad_30d_pct
+  )
+
+stopifnot(
+  length(resultados_parejas) == choose(length(etiquetas_areas), 2),
+  nrow(prueba_interaccion_todas_parejas) == 36L,
+  nrow(detalle_todas_parejas) == 36L * 9L
+)
+
+write.csv2(
+  mortalidad_todas_parejas,
+  archivo_mortalidad_parejas,
+  row.names = FALSE,
+  fileEncoding = "UTF-8",
+  na = ""
+)
+write.csv2(
+  prueba_interaccion_todas_parejas,
+  archivo_prueba_interaccion,
+  row.names = FALSE,
+  fileEncoding = "UTF-8",
+  na = ""
+)
+write.csv2(
+  detalle_todas_parejas,
+  archivo_detalle_parejas,
+  row.names = FALSE,
+  fileEncoding = "UTF-8",
+  na = ""
+)
+```
+
+```{r mostrar-todas-parejas, echo=FALSE, results='asis'}
+for (resultado in resultados_parejas) {
+  mostrar_pareja_markdown(resultado)
+}
+```
+
+```{r auditoria, include=FALSE}
+auditoria <- data.frame(
+  comprobacion = c(
+    "Pacientes en el archivo fuente",
+    "Parejas de columnas región/gravedad",
+    "Pacientes con mortalidad a 30 días conocida",
+    "Muertes dentro de 30 días",
+    "Registros paciente-área con lesión",
+    "Registros paciente-área clasificados",
+    "Registros paciente-área con gravedad incompleta",
+    "Celdas con código de región fuera de 1-9",
+    "Celdas con gravedad fuera de 1-6"
+  ),
+  resultado = c(
+    nrow(datos),
+    length(columnas_region),
+    sum(!is.na(mortalidad_30d)),
+    sum(mortalidad_30d == 1L, na.rm = TRUE),
+    nrow(lesiones_paciente_area),
+    sum(!is.na(lesiones_paciente_area$grupo_gravedad)),
+    sum(is.na(lesiones_paciente_area$grupo_gravedad)),
+    sum(region_invalida),
+    sum(gravedad_invalida)
+  ),
+  row.names = NULL
+)
+
+
+archivos_generados <- data.frame(
+  archivo = c(
+    archivo_resumen,
+    archivo_paciente_area,
+    archivo_mortalidad_parejas,
+    archivo_prueba_interaccion,
+    archivo_detalle_parejas
+  ),
+  contenido = c(
+    "Resumen de N y mortalidad por área y grupo AIS",
+    "Dataset auditable con una fila por paciente y área lesionada",
+    "Mortalidad de las 36 parejas de áreas",
+    "Prueba global de interacción de mortalidad para las 36 parejas",
+    paste0(
+      "Detalle de mortalidad, muertes esperadas y residuos estandarizados ",
+      "de las 36 parejas"
+    )
+  ),
+  row.names = NULL
+)
+```
+
+# Notas de interpretación
+
+- `n_pacientes` cuenta pacientes únicos dentro de cada combinación de área y
+  gravedad, no el número bruto de lesiones.
+- Un paciente puede aparecer en varias áreas anatómicas, pero solamente una vez
+  dentro de cada área.
+- Si alguna lesión de un área tiene la gravedad ausente o inválida, el grupo de
+  esa área se conserva como ausente porque no puede garantizarse cuál es su AIS
+  máximo real.
+- `n_con_mortalidad_30d` es el denominador utilizado para calcular
+  `mortalidad_30d_pct`.
+

@@ -1,0 +1,116 @@
+"indice_paso","paso","AIC","variable","incluida"
+0,"Modelo completo inicial",3380.49554657478,"edad_categoria",TRUE
+0,"Modelo completo inicial",3380.49554657478,"genero_masculino",TRUE
+0,"Modelo completo inicial",3380.49554657478,"precoag",TRUE
+0,"Modelo completo inicial",3380.49554657478,"atencion_prehospitalaria_medica",TRUE
+0,"Modelo completo inicial",3380.49554657478,"iot_prehospitalaria",TRUE
+0,"Modelo completo inicial",3380.49554657478,"trauma_penetrante",TRUE
+0,"Modelo completo inicial",3380.49554657478,"mecanismo_alto_riesgo",TRUE
+0,"Modelo completo inicial",3380.49554657478,"pupilas",TRUE
+0,"Modelo completo inicial",3380.49554657478,"gcs_menor_igual_8",TRUE
+0,"Modelo completo inicial",3380.49554657478,"ais3_craneo",TRUE
+0,"Modelo completo inicial",3380.49554657478,"ais3_cara",TRUE
+0,"Modelo completo inicial",3380.49554657478,"ais3_cuello",TRUE
+0,"Modelo completo inicial",3380.49554657478,"ais3_torax",TRUE
+0,"Modelo completo inicial",3380.49554657478,"ais3_abdomen",TRUE
+0,"Modelo completo inicial",3380.49554657478,"ais3_columna_vertebral",TRUE
+0,"Modelo completo inicial",3380.49554657478,"ais3_extremidades_superiores",TRUE
+0,"Modelo completo inicial",3380.49554657478,"ais3_extremidades_inferiores",TRUE
+0,"Modelo completo inicial",3380.49554657478,"ais3_piel_partes_blandas",TRUE
+0,"Modelo completo inicial",3380.49554657478,"fallo_hemodinamico",TRUE
+0,"Modelo completo inicial",3380.49554657478,"fallo_respiratorio",TRUE
+0,"Modelo completo inicial",3380.49554657478,"coagulopatia_24h",TRUE
+0,"Modelo completo inicial",3380.49554657478,"ventilacion_mecanica",TRUE
+0,"Modelo completo inicial",3380.49554657478,"hemorragia_masiva",TRUE
+1,"- trauma_penetrante",3378.50860594703,"edad_categoria",TRUE
+1,"- trauma_penetrante",3378.50860594703,"genero_masculino",TRUE
+1,"- trauma_penetrante",3378.50860594703,"precoag",TRUE
+1,"- trauma_penetrante",3378.50860594703,"atencion_prehospitalaria_medica",TRUE
+1,"- trauma_penetrante",3378.50860594703,"iot_prehospitalaria",TRUE
+1,"- trauma_penetrante",3378.50860594703,"trauma_penetrante",FALSE
+1,"- trauma_penetrante",3378.50860594703,"mecanismo_alto_riesgo",TRUE
+1,"- trauma_penetrante",3378.50860594703,"pupilas",TRUE
+1,"- trauma_penetrante",3378.50860594703,"gcs_menor_igual_8",TRUE
+1,"- trauma_penetrante",3378.50860594703,"ais3_craneo",TRUE
+1,"- trauma_penetrante",3378.50860594703,"ais3_cara",TRUE
+1,"- trauma_penetrante",3378.50860594703,"ais3_cuello",TRUE
+1,"- trauma_penetrante",3378.50860594703,"ais3_torax",TRUE
+1,"- trauma_penetrante",3378.50860594703,"ais3_abdomen",TRUE
+1,"- trauma_penetrante",3378.50860594703,"ais3_columna_vertebral",TRUE
+1,"- trauma_penetrante",3378.50860594703,"ais3_extremidades_superiores",TRUE
+1,"- trauma_penetrante",3378.50860594703,"ais3_extremidades_inferiores",TRUE
+1,"- trauma_penetrante",3378.50860594703,"ais3_piel_partes_blandas",TRUE
+1,"- trauma_penetrante",3378.50860594703,"fallo_hemodinamico",TRUE
+1,"- trauma_penetrante",3378.50860594703,"fallo_respiratorio",TRUE
+1,"- trauma_penetrante",3378.50860594703,"coagulopatia_24h",TRUE
+1,"- trauma_penetrante",3378.50860594703,"ventilacion_mecanica",TRUE
+1,"- trauma_penetrante",3378.50860594703,"hemorragia_masiva",TRUE
+2,"- ais3_extremidades_superiores",3376.68081387771,"edad_categoria",TRUE
+2,"- ais3_extremidades_superiores",3376.68081387771,"genero_masculino",TRUE
+2,"- ais3_extremidades_superiores",3376.68081387771,"precoag",TRUE
+2,"- ais3_extremidades_superiores",3376.68081387771,"atencion_prehospitalaria_medica",TRUE
+2,"- ais3_extremidades_superiores",3376.68081387771,"iot_prehospitalaria",TRUE
+2,"- ais3_extremidades_superiores",3376.68081387771,"trauma_penetrante",FALSE
+2,"- ais3_extremidades_superiores",3376.68081387771,"mecanismo_alto_riesgo",TRUE
+2,"- ais3_extremidades_superiores",3376.68081387771,"pupilas",TRUE
+2,"- ais3_extremidades_superiores",3376.68081387771,"gcs_menor_igual_8",TRUE
+2,"- ais3_extremidades_superiores",3376.68081387771,"ais3_craneo",TRUE
+2,"- ais3_extremidades_superiores",3376.68081387771,"ais3_cara",TRUE
+2,"- ais3_extremidades_superiores",3376.68081387771,"ais3_cuello",TRUE
+2,"- ais3_extremidades_superiores",3376.68081387771,"ais3_torax",TRUE
+2,"- ais3_extremidades_superiores",3376.68081387771,"ais3_abdomen",TRUE
+2,"- ais3_extremidades_superiores",3376.68081387771,"ais3_columna_vertebral",TRUE
+2,"- ais3_extremidades_superiores",3376.68081387771,"ais3_extremidades_superiores",FALSE
+2,"- ais3_extremidades_superiores",3376.68081387771,"ais3_extremidades_inferiores",TRUE
+2,"- ais3_extremidades_superiores",3376.68081387771,"ais3_piel_partes_blandas",TRUE
+2,"- ais3_extremidades_superiores",3376.68081387771,"fallo_hemodinamico",TRUE
+2,"- ais3_extremidades_superiores",3376.68081387771,"fallo_respiratorio",TRUE
+2,"- ais3_extremidades_superiores",3376.68081387771,"coagulopatia_24h",TRUE
+2,"- ais3_extremidades_superiores",3376.68081387771,"ventilacion_mecanica",TRUE
+2,"- ais3_extremidades_superiores",3376.68081387771,"hemorragia_masiva",TRUE
+3,"- atencion_prehospitalaria_medica",3374.89730598812,"edad_categoria",TRUE
+3,"- atencion_prehospitalaria_medica",3374.89730598812,"genero_masculino",TRUE
+3,"- atencion_prehospitalaria_medica",3374.89730598812,"precoag",TRUE
+3,"- atencion_prehospitalaria_medica",3374.89730598812,"atencion_prehospitalaria_medica",FALSE
+3,"- atencion_prehospitalaria_medica",3374.89730598812,"iot_prehospitalaria",TRUE
+3,"- atencion_prehospitalaria_medica",3374.89730598812,"trauma_penetrante",FALSE
+3,"- atencion_prehospitalaria_medica",3374.89730598812,"mecanismo_alto_riesgo",TRUE
+3,"- atencion_prehospitalaria_medica",3374.89730598812,"pupilas",TRUE
+3,"- atencion_prehospitalaria_medica",3374.89730598812,"gcs_menor_igual_8",TRUE
+3,"- atencion_prehospitalaria_medica",3374.89730598812,"ais3_craneo",TRUE
+3,"- atencion_prehospitalaria_medica",3374.89730598812,"ais3_cara",TRUE
+3,"- atencion_prehospitalaria_medica",3374.89730598812,"ais3_cuello",TRUE
+3,"- atencion_prehospitalaria_medica",3374.89730598812,"ais3_torax",TRUE
+3,"- atencion_prehospitalaria_medica",3374.89730598812,"ais3_abdomen",TRUE
+3,"- atencion_prehospitalaria_medica",3374.89730598812,"ais3_columna_vertebral",TRUE
+3,"- atencion_prehospitalaria_medica",3374.89730598812,"ais3_extremidades_superiores",FALSE
+3,"- atencion_prehospitalaria_medica",3374.89730598812,"ais3_extremidades_inferiores",TRUE
+3,"- atencion_prehospitalaria_medica",3374.89730598812,"ais3_piel_partes_blandas",TRUE
+3,"- atencion_prehospitalaria_medica",3374.89730598812,"fallo_hemodinamico",TRUE
+3,"- atencion_prehospitalaria_medica",3374.89730598812,"fallo_respiratorio",TRUE
+3,"- atencion_prehospitalaria_medica",3374.89730598812,"coagulopatia_24h",TRUE
+3,"- atencion_prehospitalaria_medica",3374.89730598812,"ventilacion_mecanica",TRUE
+3,"- atencion_prehospitalaria_medica",3374.89730598812,"hemorragia_masiva",TRUE
+4,"- ais3_abdomen",3373.42485049058,"edad_categoria",TRUE
+4,"- ais3_abdomen",3373.42485049058,"genero_masculino",TRUE
+4,"- ais3_abdomen",3373.42485049058,"precoag",TRUE
+4,"- ais3_abdomen",3373.42485049058,"atencion_prehospitalaria_medica",FALSE
+4,"- ais3_abdomen",3373.42485049058,"iot_prehospitalaria",TRUE
+4,"- ais3_abdomen",3373.42485049058,"trauma_penetrante",FALSE
+4,"- ais3_abdomen",3373.42485049058,"mecanismo_alto_riesgo",TRUE
+4,"- ais3_abdomen",3373.42485049058,"pupilas",TRUE
+4,"- ais3_abdomen",3373.42485049058,"gcs_menor_igual_8",TRUE
+4,"- ais3_abdomen",3373.42485049058,"ais3_craneo",TRUE
+4,"- ais3_abdomen",3373.42485049058,"ais3_cara",TRUE
+4,"- ais3_abdomen",3373.42485049058,"ais3_cuello",TRUE
+4,"- ais3_abdomen",3373.42485049058,"ais3_torax",TRUE
+4,"- ais3_abdomen",3373.42485049058,"ais3_abdomen",FALSE
+4,"- ais3_abdomen",3373.42485049058,"ais3_columna_vertebral",TRUE
+4,"- ais3_abdomen",3373.42485049058,"ais3_extremidades_superiores",FALSE
+4,"- ais3_abdomen",3373.42485049058,"ais3_extremidades_inferiores",TRUE
+4,"- ais3_abdomen",3373.42485049058,"ais3_piel_partes_blandas",TRUE
+4,"- ais3_abdomen",3373.42485049058,"fallo_hemodinamico",TRUE
+4,"- ais3_abdomen",3373.42485049058,"fallo_respiratorio",TRUE
+4,"- ais3_abdomen",3373.42485049058,"coagulopatia_24h",TRUE
+4,"- ais3_abdomen",3373.42485049058,"ventilacion_mecanica",TRUE
+4,"- ais3_abdomen",3373.42485049058,"hemorragia_masiva",TRUE

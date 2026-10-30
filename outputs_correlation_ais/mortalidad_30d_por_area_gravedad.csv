@@ -1,0 +1,28 @@
+"codigo_area";"area_anatomica";"grupo_gravedad";"n_pacientes";"n_con_mortalidad_30d";"muertes_30d";"mortalidad_30d_pct"
+1;"Cráneo";"AIS 1-2";2364;2242;102;4,55
+1;"Cráneo";"AIS 3-4";5228;4964;568;11,44
+1;"Cráneo";"AIS 5-6";2476;2343;1071;45,71
+2;"Cara";"AIS 1-2";3500;3309;378;11,42
+2;"Cara";"AIS 3-4";568;527;91;17,27
+2;"Cara";"AIS 5-6";0;0;0;
+3;"Cuello";"AIS 1-2";220;211;27;12,8
+3;"Cuello";"AIS 3-4";143;136;18;13,24
+3;"Cuello";"AIS 5-6";8;8;5;62,5
+4;"Tórax";"AIS 1-2";2195;2073;156;7,53
+4;"Tórax";"AIS 3-4";6617;6272;620;9,89
+4;"Tórax";"AIS 5-6";686;631;145;22,98
+5;"Abdomen";"AIS 1-2";1572;1492;115;7,71
+5;"Abdomen";"AIS 3-4";2228;2127;196;9,21
+5;"Abdomen";"AIS 5-6";247;231;58;25,11
+6;"Columna vertebral";"AIS 1-2";3394;3240;310;9,57
+6;"Columna vertebral";"AIS 3-4";1508;1383;149;10,77
+6;"Columna vertebral";"AIS 5-6";490;350;90;25,71
+7;"Extremidades superiores";"AIS 1-2";4498;4268;346;8,11
+7;"Extremidades superiores";"AIS 3-4";530;502;41;8,17
+7;"Extremidades superiores";"AIS 5-6";0;0;0;
+8;"Extremidades inferiores";"AIS 1-2";2237;2129;161;7,56
+8;"Extremidades inferiores";"AIS 3-4";3063;2928;247;8,44
+8;"Extremidades inferiores";"AIS 5-6";371;362;116;32,04
+9;"Piel y partes blandas";"AIS 1-2";743;678;56;8,26
+9;"Piel y partes blandas";"AIS 3-4";92;65;12;18,46
+9;"Piel y partes blandas";"AIS 5-6";66;45;30;66,67

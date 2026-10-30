@@ -1,0 +1,325 @@
+"codigo_area_1";"area_1";"codigo_area_2";"area_2";"gravedad_area_1";"gravedad_area_2";"n_pacientes";"n_con_mortalidad_30d";"muertes_30d";"mortalidad_30d_pct"
+1;"Cráneo";2;"Cara";"AIS 1-2";"AIS 1-2";637;605;20;3,30578512396694
+1;"Cráneo";2;"Cara";"AIS 1-2";"AIS 3-4";58;54;2;3,7037037037037
+1;"Cráneo";2;"Cara";"AIS 1-2";"AIS 5-6";0;0;0;
+1;"Cráneo";2;"Cara";"AIS 3-4";"AIS 1-2";1336;1271;121;9,52006294256491
+1;"Cráneo";2;"Cara";"AIS 3-4";"AIS 3-4";217;203;13;6,40394088669951
+1;"Cráneo";2;"Cara";"AIS 3-4";"AIS 5-6";0;0;0;
+1;"Cráneo";2;"Cara";"AIS 5-6";"AIS 1-2";522;485;194;40
+1;"Cráneo";2;"Cara";"AIS 5-6";"AIS 3-4";150;143;70;48,951048951049
+1;"Cráneo";2;"Cara";"AIS 5-6";"AIS 5-6";0;0;0;
+1;"Cráneo";3;"Cuello";"AIS 1-2";"AIS 1-2";32;31;0;0
+1;"Cráneo";3;"Cuello";"AIS 1-2";"AIS 3-4";12;12;2;16,6666666666667
+1;"Cráneo";3;"Cuello";"AIS 1-2";"AIS 5-6";0;0;0;
+1;"Cráneo";3;"Cuello";"AIS 3-4";"AIS 1-2";28;26;5;19,2307692307692
+1;"Cráneo";3;"Cuello";"AIS 3-4";"AIS 3-4";24;24;6;25
+1;"Cráneo";3;"Cuello";"AIS 3-4";"AIS 5-6";2;2;1;50
+1;"Cráneo";3;"Cuello";"AIS 5-6";"AIS 1-2";25;24;11;45,8333333333333
+1;"Cráneo";3;"Cuello";"AIS 5-6";"AIS 3-4";6;6;1;16,6666666666667
+1;"Cráneo";3;"Cuello";"AIS 5-6";"AIS 5-6";2;2;1;50
+1;"Cráneo";4;"Tórax";"AIS 1-2";"AIS 1-2";345;323;11;3,40557275541796
+1;"Cráneo";4;"Tórax";"AIS 1-2";"AIS 3-4";943;910;40;4,3956043956044
+1;"Cráneo";4;"Tórax";"AIS 1-2";"AIS 5-6";75;69;10;14,4927536231884
+1;"Cráneo";4;"Tórax";"AIS 3-4";"AIS 1-2";526;496;52;10,4838709677419
+1;"Cráneo";4;"Tórax";"AIS 3-4";"AIS 3-4";1244;1159;171;14,7540983606557
+1;"Cráneo";4;"Tórax";"AIS 3-4";"AIS 5-6";117;103;28;27,1844660194175
+1;"Cráneo";4;"Tórax";"AIS 5-6";"AIS 1-2";185;174;65;37,3563218390805
+1;"Cráneo";4;"Tórax";"AIS 5-6";"AIS 3-4";500;472;249;52,7542372881356
+1;"Cráneo";4;"Tórax";"AIS 5-6";"AIS 5-6";66;61;41;67,2131147540984
+1;"Cráneo";5;"Abdomen";"AIS 1-2";"AIS 1-2";209;199;10;5,0251256281407
+1;"Cráneo";5;"Abdomen";"AIS 1-2";"AIS 3-4";231;221;15;6,78733031674208
+1;"Cráneo";5;"Abdomen";"AIS 1-2";"AIS 5-6";19;18;3;16,6666666666667
+1;"Cráneo";5;"Abdomen";"AIS 3-4";"AIS 1-2";268;252;27;10,7142857142857
+1;"Cráneo";5;"Abdomen";"AIS 3-4";"AIS 3-4";241;226;45;19,9115044247788
+1;"Cráneo";5;"Abdomen";"AIS 3-4";"AIS 5-6";34;32;14;43,75
+1;"Cráneo";5;"Abdomen";"AIS 5-6";"AIS 1-2";105;97;49;50,5154639175258
+1;"Cráneo";5;"Abdomen";"AIS 5-6";"AIS 3-4";102;96;56;58,3333333333333
+1;"Cráneo";5;"Abdomen";"AIS 5-6";"AIS 5-6";13;12;9;75
+1;"Cráneo";6;"Columna vertebral";"AIS 1-2";"AIS 1-2";527;509;25;4,91159135559921
+1;"Cráneo";6;"Columna vertebral";"AIS 1-2";"AIS 3-4";217;201;10;4,97512437810945
+1;"Cráneo";6;"Columna vertebral";"AIS 1-2";"AIS 5-6";67;50;7;14
+1;"Cráneo";6;"Columna vertebral";"AIS 3-4";"AIS 1-2";763;727;91;12,5171939477304
+1;"Cráneo";6;"Columna vertebral";"AIS 3-4";"AIS 3-4";245;223;36;16,1434977578475
+1;"Cráneo";6;"Columna vertebral";"AIS 3-4";"AIS 5-6";60;38;7;18,4210526315789
+1;"Cráneo";6;"Columna vertebral";"AIS 5-6";"AIS 1-2";319;301;123;40,8637873754153
+1;"Cráneo";6;"Columna vertebral";"AIS 5-6";"AIS 3-4";87;80;46;57,5
+1;"Cráneo";6;"Columna vertebral";"AIS 5-6";"AIS 5-6";34;29;21;72,4137931034483
+1;"Cráneo";7;"Extremidades superiores";"AIS 1-2";"AIS 1-2";743;710;38;5,35211267605634
+1;"Cráneo";7;"Extremidades superiores";"AIS 1-2";"AIS 3-4";63;57;1;1,75438596491228
+1;"Cráneo";7;"Extremidades superiores";"AIS 1-2";"AIS 5-6";0;0;0;
+1;"Cráneo";7;"Extremidades superiores";"AIS 3-4";"AIS 1-2";1067;1002;84;8,38323353293413
+1;"Cráneo";7;"Extremidades superiores";"AIS 3-4";"AIS 3-4";91;88;14;15,9090909090909
+1;"Cráneo";7;"Extremidades superiores";"AIS 3-4";"AIS 5-6";0;0;0;
+1;"Cráneo";7;"Extremidades superiores";"AIS 5-6";"AIS 1-2";392;362;142;39,2265193370166
+1;"Cráneo";7;"Extremidades superiores";"AIS 5-6";"AIS 3-4";31;29;12;41,3793103448276
+1;"Cráneo";7;"Extremidades superiores";"AIS 5-6";"AIS 5-6";0;0;0;
+1;"Cráneo";8;"Extremidades inferiores";"AIS 1-2";"AIS 1-2";389;366;5;1,36612021857923
+1;"Cráneo";8;"Extremidades inferiores";"AIS 1-2";"AIS 3-4";383;375;20;5,33333333333333
+1;"Cráneo";8;"Extremidades inferiores";"AIS 1-2";"AIS 5-6";48;46;14;30,4347826086957
+1;"Cráneo";8;"Extremidades inferiores";"AIS 3-4";"AIS 1-2";453;433;40;9,2378752886836
+1;"Cráneo";8;"Extremidades inferiores";"AIS 3-4";"AIS 3-4";488;463;60;12,9589632829374
+1;"Cráneo";8;"Extremidades inferiores";"AIS 3-4";"AIS 5-6";69;67;30;44,7761194029851
+1;"Cráneo";8;"Extremidades inferiores";"AIS 5-6";"AIS 1-2";193;188;83;44,1489361702128
+1;"Cráneo";8;"Extremidades inferiores";"AIS 5-6";"AIS 3-4";188;174;83;47,7011494252874
+1;"Cráneo";8;"Extremidades inferiores";"AIS 5-6";"AIS 5-6";37;37;26;70,2702702702703
+1;"Cráneo";9;"Piel y partes blandas";"AIS 1-2";"AIS 1-2";104;98;4;4,08163265306122
+1;"Cráneo";9;"Piel y partes blandas";"AIS 1-2";"AIS 3-4";3;2;0;0
+1;"Cráneo";9;"Piel y partes blandas";"AIS 1-2";"AIS 5-6";5;4;4;100
+1;"Cráneo";9;"Piel y partes blandas";"AIS 3-4";"AIS 1-2";126;115;15;13,0434782608696
+1;"Cráneo";9;"Piel y partes blandas";"AIS 3-4";"AIS 3-4";5;5;1;20
+1;"Cráneo";9;"Piel y partes blandas";"AIS 3-4";"AIS 5-6";1;1;1;100
+1;"Cráneo";9;"Piel y partes blandas";"AIS 5-6";"AIS 1-2";64;58;28;48,2758620689655
+1;"Cráneo";9;"Piel y partes blandas";"AIS 5-6";"AIS 3-4";2;2;1;50
+1;"Cráneo";9;"Piel y partes blandas";"AIS 5-6";"AIS 5-6";2;2;2;100
+2;"Cara";3;"Cuello";"AIS 1-2";"AIS 1-2";49;47;5;10,6382978723404
+2;"Cara";3;"Cuello";"AIS 1-2";"AIS 3-4";28;28;5;17,8571428571429
+2;"Cara";3;"Cuello";"AIS 1-2";"AIS 5-6";3;3;1;33,3333333333333
+2;"Cara";3;"Cuello";"AIS 3-4";"AIS 1-2";7;7;3;42,8571428571429
+2;"Cara";3;"Cuello";"AIS 3-4";"AIS 3-4";5;4;0;0
+2;"Cara";3;"Cuello";"AIS 3-4";"AIS 5-6";0;0;0;
+2;"Cara";3;"Cuello";"AIS 5-6";"AIS 1-2";0;0;0;
+2;"Cara";3;"Cuello";"AIS 5-6";"AIS 3-4";0;0;0;
+2;"Cara";3;"Cuello";"AIS 5-6";"AIS 5-6";0;0;0;
+2;"Cara";4;"Tórax";"AIS 1-2";"AIS 1-2";493;469;40;8,52878464818763
+2;"Cara";4;"Tórax";"AIS 1-2";"AIS 3-4";1126;1070;145;13,5514018691589
+2;"Cara";4;"Tórax";"AIS 1-2";"AIS 5-6";121;109;23;21,1009174311927
+2;"Cara";4;"Tórax";"AIS 3-4";"AIS 1-2";86;81;16;19,7530864197531
+2;"Cara";4;"Tórax";"AIS 3-4";"AIS 3-4";179;163;32;19,6319018404908
+2;"Cara";4;"Tórax";"AIS 3-4";"AIS 5-6";24;21;9;42,8571428571429
+2;"Cara";4;"Tórax";"AIS 5-6";"AIS 1-2";0;0;0;
+2;"Cara";4;"Tórax";"AIS 5-6";"AIS 3-4";0;0;0;
+2;"Cara";4;"Tórax";"AIS 5-6";"AIS 5-6";0;0;0;
+2;"Cara";5;"Abdomen";"AIS 1-2";"AIS 1-2";283;267;29;10,8614232209738
+2;"Cara";5;"Abdomen";"AIS 1-2";"AIS 3-4";302;288;33;11,4583333333333
+2;"Cara";5;"Abdomen";"AIS 1-2";"AIS 5-6";34;32;8;25
+2;"Cara";5;"Abdomen";"AIS 3-4";"AIS 1-2";37;35;10;28,5714285714286
+2;"Cara";5;"Abdomen";"AIS 3-4";"AIS 3-4";50;47;12;25,531914893617
+2;"Cara";5;"Abdomen";"AIS 3-4";"AIS 5-6";1;1;0;0
+2;"Cara";5;"Abdomen";"AIS 5-6";"AIS 1-2";0;0;0;
+2;"Cara";5;"Abdomen";"AIS 5-6";"AIS 3-4";0;0;0;
+2;"Cara";5;"Abdomen";"AIS 5-6";"AIS 5-6";0;0;0;
+2;"Cara";6;"Columna vertebral";"AIS 1-2";"AIS 1-2";689;650;69;10,6153846153846
+2;"Cara";6;"Columna vertebral";"AIS 1-2";"AIS 3-4";219;201;23;11,4427860696517
+2;"Cara";6;"Columna vertebral";"AIS 1-2";"AIS 5-6";45;31;11;35,4838709677419
+2;"Cara";6;"Columna vertebral";"AIS 3-4";"AIS 1-2";112;106;18;16,9811320754717
+2;"Cara";6;"Columna vertebral";"AIS 3-4";"AIS 3-4";32;28;10;35,7142857142857
+2;"Cara";6;"Columna vertebral";"AIS 3-4";"AIS 5-6";9;8;3;37,5
+2;"Cara";6;"Columna vertebral";"AIS 5-6";"AIS 1-2";0;0;0;
+2;"Cara";6;"Columna vertebral";"AIS 5-6";"AIS 3-4";0;0;0;
+2;"Cara";6;"Columna vertebral";"AIS 5-6";"AIS 5-6";0;0;0;
+2;"Cara";7;"Extremidades superiores";"AIS 1-2";"AIS 1-2";1025;961;88;9,15712799167534
+2;"Cara";7;"Extremidades superiores";"AIS 1-2";"AIS 3-4";99;94;10;10,6382978723404
+2;"Cara";7;"Extremidades superiores";"AIS 1-2";"AIS 5-6";0;0;0;
+2;"Cara";7;"Extremidades superiores";"AIS 3-4";"AIS 1-2";177;168;30;17,8571428571429
+2;"Cara";7;"Extremidades superiores";"AIS 3-4";"AIS 3-4";27;26;0;0
+2;"Cara";7;"Extremidades superiores";"AIS 3-4";"AIS 5-6";0;0;0;
+2;"Cara";7;"Extremidades superiores";"AIS 5-6";"AIS 1-2";0;0;0;
+2;"Cara";7;"Extremidades superiores";"AIS 5-6";"AIS 3-4";0;0;0;
+2;"Cara";7;"Extremidades superiores";"AIS 5-6";"AIS 5-6";0;0;0;
+2;"Cara";8;"Extremidades inferiores";"AIS 1-2";"AIS 1-2";502;479;40;8,35073068893528
+2;"Cara";8;"Extremidades inferiores";"AIS 1-2";"AIS 3-4";549;520;50;9,61538461538461
+2;"Cara";8;"Extremidades inferiores";"AIS 1-2";"AIS 5-6";49;48;17;35,4166666666667
+2;"Cara";8;"Extremidades inferiores";"AIS 3-4";"AIS 1-2";69;65;14;21,5384615384615
+2;"Cara";8;"Extremidades inferiores";"AIS 3-4";"AIS 3-4";117;108;18;16,6666666666667
+2;"Cara";8;"Extremidades inferiores";"AIS 3-4";"AIS 5-6";14;14;3;21,4285714285714
+2;"Cara";8;"Extremidades inferiores";"AIS 5-6";"AIS 1-2";0;0;0;
+2;"Cara";8;"Extremidades inferiores";"AIS 5-6";"AIS 3-4";0;0;0;
+2;"Cara";8;"Extremidades inferiores";"AIS 5-6";"AIS 5-6";0;0;0;
+2;"Cara";9;"Piel y partes blandas";"AIS 1-2";"AIS 1-2";158;149;19;12,751677852349
+2;"Cara";9;"Piel y partes blandas";"AIS 1-2";"AIS 3-4";8;6;1;16,6666666666667
+2;"Cara";9;"Piel y partes blandas";"AIS 1-2";"AIS 5-6";3;2;2;100
+2;"Cara";9;"Piel y partes blandas";"AIS 3-4";"AIS 1-2";19;16;5;31,25
+2;"Cara";9;"Piel y partes blandas";"AIS 3-4";"AIS 3-4";1;1;0;0
+2;"Cara";9;"Piel y partes blandas";"AIS 3-4";"AIS 5-6";1;1;1;100
+2;"Cara";9;"Piel y partes blandas";"AIS 5-6";"AIS 1-2";0;0;0;
+2;"Cara";9;"Piel y partes blandas";"AIS 5-6";"AIS 3-4";0;0;0;
+2;"Cara";9;"Piel y partes blandas";"AIS 5-6";"AIS 5-6";0;0;0;
+3;"Cuello";4;"Tórax";"AIS 1-2";"AIS 1-2";36;36;4;11,1111111111111
+3;"Cuello";4;"Tórax";"AIS 1-2";"AIS 3-4";60;59;12;20,3389830508475
+3;"Cuello";4;"Tórax";"AIS 1-2";"AIS 5-6";7;7;3;42,8571428571429
+3;"Cuello";4;"Tórax";"AIS 3-4";"AIS 1-2";17;17;3;17,6470588235294
+3;"Cuello";4;"Tórax";"AIS 3-4";"AIS 3-4";37;37;4;10,8108108108108
+3;"Cuello";4;"Tórax";"AIS 3-4";"AIS 5-6";11;11;5;45,4545454545455
+3;"Cuello";4;"Tórax";"AIS 5-6";"AIS 1-2";1;1;0;0
+3;"Cuello";4;"Tórax";"AIS 5-6";"AIS 3-4";1;1;0;0
+3;"Cuello";4;"Tórax";"AIS 5-6";"AIS 5-6";0;0;0;
+3;"Cuello";5;"Abdomen";"AIS 1-2";"AIS 1-2";21;21;4;19,047619047619
+3;"Cuello";5;"Abdomen";"AIS 1-2";"AIS 3-4";22;22;7;31,8181818181818
+3;"Cuello";5;"Abdomen";"AIS 1-2";"AIS 5-6";1;1;1;100
+3;"Cuello";5;"Abdomen";"AIS 3-4";"AIS 1-2";14;13;1;7,69230769230769
+3;"Cuello";5;"Abdomen";"AIS 3-4";"AIS 3-4";11;11;4;36,3636363636364
+3;"Cuello";5;"Abdomen";"AIS 3-4";"AIS 5-6";1;1;0;0
+3;"Cuello";5;"Abdomen";"AIS 5-6";"AIS 1-2";1;1;0;0
+3;"Cuello";5;"Abdomen";"AIS 5-6";"AIS 3-4";0;0;0;
+3;"Cuello";5;"Abdomen";"AIS 5-6";"AIS 5-6";0;0;0;
+3;"Cuello";6;"Columna vertebral";"AIS 1-2";"AIS 1-2";33;31;3;9,67741935483871
+3;"Cuello";6;"Columna vertebral";"AIS 1-2";"AIS 3-4";17;17;5;29,4117647058824
+3;"Cuello";6;"Columna vertebral";"AIS 1-2";"AIS 5-6";8;6;3;50
+3;"Cuello";6;"Columna vertebral";"AIS 3-4";"AIS 1-2";26;26;3;11,5384615384615
+3;"Cuello";6;"Columna vertebral";"AIS 3-4";"AIS 3-4";13;12;2;16,6666666666667
+3;"Cuello";6;"Columna vertebral";"AIS 3-4";"AIS 5-6";4;4;2;50
+3;"Cuello";6;"Columna vertebral";"AIS 5-6";"AIS 1-2";0;0;0;
+3;"Cuello";6;"Columna vertebral";"AIS 5-6";"AIS 3-4";1;1;1;100
+3;"Cuello";6;"Columna vertebral";"AIS 5-6";"AIS 5-6";0;0;0;
+3;"Cuello";7;"Extremidades superiores";"AIS 1-2";"AIS 1-2";50;48;6;12,5
+3;"Cuello";7;"Extremidades superiores";"AIS 1-2";"AIS 3-4";4;4;2;50
+3;"Cuello";7;"Extremidades superiores";"AIS 1-2";"AIS 5-6";0;0;0;
+3;"Cuello";7;"Extremidades superiores";"AIS 3-4";"AIS 1-2";32;30;4;13,3333333333333
+3;"Cuello";7;"Extremidades superiores";"AIS 3-4";"AIS 3-4";1;1;0;0
+3;"Cuello";7;"Extremidades superiores";"AIS 3-4";"AIS 5-6";0;0;0;
+3;"Cuello";7;"Extremidades superiores";"AIS 5-6";"AIS 1-2";1;1;0;0
+3;"Cuello";7;"Extremidades superiores";"AIS 5-6";"AIS 3-4";0;0;0;
+3;"Cuello";7;"Extremidades superiores";"AIS 5-6";"AIS 5-6";0;0;0;
+3;"Cuello";8;"Extremidades inferiores";"AIS 1-2";"AIS 1-2";22;21;3;14,2857142857143
+3;"Cuello";8;"Extremidades inferiores";"AIS 1-2";"AIS 3-4";22;22;5;22,7272727272727
+3;"Cuello";8;"Extremidades inferiores";"AIS 1-2";"AIS 5-6";3;3;2;66,6666666666667
+3;"Cuello";8;"Extremidades inferiores";"AIS 3-4";"AIS 1-2";15;13;2;15,3846153846154
+3;"Cuello";8;"Extremidades inferiores";"AIS 3-4";"AIS 3-4";13;13;3;23,0769230769231
+3;"Cuello";8;"Extremidades inferiores";"AIS 3-4";"AIS 5-6";1;1;1;100
+3;"Cuello";8;"Extremidades inferiores";"AIS 5-6";"AIS 1-2";0;0;0;
+3;"Cuello";8;"Extremidades inferiores";"AIS 5-6";"AIS 3-4";0;0;0;
+3;"Cuello";8;"Extremidades inferiores";"AIS 5-6";"AIS 5-6";0;0;0;
+3;"Cuello";9;"Piel y partes blandas";"AIS 1-2";"AIS 1-2";14;13;0;0
+3;"Cuello";9;"Piel y partes blandas";"AIS 1-2";"AIS 3-4";1;1;0;0
+3;"Cuello";9;"Piel y partes blandas";"AIS 1-2";"AIS 5-6";2;2;2;100
+3;"Cuello";9;"Piel y partes blandas";"AIS 3-4";"AIS 1-2";2;1;0;0
+3;"Cuello";9;"Piel y partes blandas";"AIS 3-4";"AIS 3-4";1;1;0;0
+3;"Cuello";9;"Piel y partes blandas";"AIS 3-4";"AIS 5-6";1;1;1;100
+3;"Cuello";9;"Piel y partes blandas";"AIS 5-6";"AIS 1-2";0;0;0;
+3;"Cuello";9;"Piel y partes blandas";"AIS 5-6";"AIS 3-4";0;0;0;
+3;"Cuello";9;"Piel y partes blandas";"AIS 5-6";"AIS 5-6";0;0;0;
+4;"Tórax";5;"Abdomen";"AIS 1-2";"AIS 1-2";271;264;10;3,78787878787879
+4;"Tórax";5;"Abdomen";"AIS 1-2";"AIS 3-4";307;292;25;8,56164383561644
+4;"Tórax";5;"Abdomen";"AIS 1-2";"AIS 5-6";24;23;3;13,0434782608696
+4;"Tórax";5;"Abdomen";"AIS 3-4";"AIS 1-2";826;780;72;9,23076923076923
+4;"Tórax";5;"Abdomen";"AIS 3-4";"AIS 3-4";1012;955;101;10,5759162303665
+4;"Tórax";5;"Abdomen";"AIS 3-4";"AIS 5-6";139;131;32;24,4274809160305
+4;"Tórax";5;"Abdomen";"AIS 5-6";"AIS 1-2";94;85;17;20
+4;"Tórax";5;"Abdomen";"AIS 5-6";"AIS 3-4";122;116;26;22,4137931034483
+4;"Tórax";5;"Abdomen";"AIS 5-6";"AIS 5-6";24;21;13;61,9047619047619
+4;"Tórax";6;"Columna vertebral";"AIS 1-2";"AIS 1-2";528;502;46;9,16334661354582
+4;"Tórax";6;"Columna vertebral";"AIS 1-2";"AIS 3-4";212;202;17;8,41584158415842
+4;"Tórax";6;"Columna vertebral";"AIS 1-2";"AIS 5-6";54;41;7;17,0731707317073
+4;"Tórax";6;"Columna vertebral";"AIS 3-4";"AIS 1-2";1802;1730;158;9,13294797687861
+4;"Tórax";6;"Columna vertebral";"AIS 3-4";"AIS 3-4";594;532;72;13,5338345864662
+4;"Tórax";6;"Columna vertebral";"AIS 3-4";"AIS 5-6";168;136;20;14,7058823529412
+4;"Tórax";6;"Columna vertebral";"AIS 5-6";"AIS 1-2";198;183;33;18,0327868852459
+4;"Tórax";6;"Columna vertebral";"AIS 5-6";"AIS 3-4";88;79;18;22,7848101265823
+4;"Tórax";6;"Columna vertebral";"AIS 5-6";"AIS 5-6";22;20;10;50
+4;"Tórax";7;"Extremidades superiores";"AIS 1-2";"AIS 1-2";662;628;38;6,05095541401274
+4;"Tórax";7;"Extremidades superiores";"AIS 1-2";"AIS 3-4";84;81;2;2,46913580246914
+4;"Tórax";7;"Extremidades superiores";"AIS 1-2";"AIS 5-6";0;0;0;
+4;"Tórax";7;"Extremidades superiores";"AIS 3-4";"AIS 1-2";2352;2238;193;8,62377122430742
+4;"Tórax";7;"Extremidades superiores";"AIS 3-4";"AIS 3-4";195;185;21;11,3513513513514
+4;"Tórax";7;"Extremidades superiores";"AIS 3-4";"AIS 5-6";0;0;0;
+4;"Tórax";7;"Extremidades superiores";"AIS 5-6";"AIS 1-2";239;220;40;18,1818181818182
+4;"Tórax";7;"Extremidades superiores";"AIS 5-6";"AIS 3-4";29;26;12;46,1538461538462
+4;"Tórax";7;"Extremidades superiores";"AIS 5-6";"AIS 5-6";0;0;0;
+4;"Tórax";8;"Extremidades inferiores";"AIS 1-2";"AIS 1-2";363;343;18;5,24781341107872
+4;"Tórax";8;"Extremidades inferiores";"AIS 1-2";"AIS 3-4";457;442;27;6,10859728506787
+4;"Tórax";8;"Extremidades inferiores";"AIS 1-2";"AIS 5-6";43;43;10;23,2558139534884
+4;"Tórax";8;"Extremidades inferiores";"AIS 3-4";"AIS 1-2";999;953;81;8,49947534102833
+4;"Tórax";8;"Extremidades inferiores";"AIS 3-4";"AIS 3-4";1180;1118;122;10,912343470483
+4;"Tórax";8;"Extremidades inferiores";"AIS 3-4";"AIS 5-6";165;159;56;35,2201257861635
+4;"Tórax";8;"Extremidades inferiores";"AIS 5-6";"AIS 1-2";97;92;15;16,304347826087
+4;"Tórax";8;"Extremidades inferiores";"AIS 5-6";"AIS 3-4";157;142;33;23,2394366197183
+4;"Tórax";8;"Extremidades inferiores";"AIS 5-6";"AIS 5-6";50;48;24;50
+4;"Tórax";9;"Piel y partes blandas";"AIS 1-2";"AIS 1-2";99;93;5;5,37634408602151
+4;"Tórax";9;"Piel y partes blandas";"AIS 1-2";"AIS 3-4";10;9;2;22,2222222222222
+4;"Tórax";9;"Piel y partes blandas";"AIS 1-2";"AIS 5-6";2;1;1;100
+4;"Tórax";9;"Piel y partes blandas";"AIS 3-4";"AIS 1-2";245;228;27;11,8421052631579
+4;"Tórax";9;"Piel y partes blandas";"AIS 3-4";"AIS 3-4";11;10;3;30
+4;"Tórax";9;"Piel y partes blandas";"AIS 3-4";"AIS 5-6";1;1;1;100
+4;"Tórax";9;"Piel y partes blandas";"AIS 5-6";"AIS 1-2";30;26;6;23,0769230769231
+4;"Tórax";9;"Piel y partes blandas";"AIS 5-6";"AIS 3-4";4;4;3;75
+4;"Tórax";9;"Piel y partes blandas";"AIS 5-6";"AIS 5-6";2;2;2;100
+5;"Abdomen";6;"Columna vertebral";"AIS 1-2";"AIS 1-2";437;417;43;10,3117505995204
+5;"Abdomen";6;"Columna vertebral";"AIS 1-2";"AIS 3-4";133;120;13;10,8333333333333
+5;"Abdomen";6;"Columna vertebral";"AIS 1-2";"AIS 5-6";20;16;3;18,75
+5;"Abdomen";6;"Columna vertebral";"AIS 3-4";"AIS 1-2";491;471;62;13,1634819532909
+5;"Abdomen";6;"Columna vertebral";"AIS 3-4";"AIS 3-4";135;125;23;18,4
+5;"Abdomen";6;"Columna vertebral";"AIS 3-4";"AIS 5-6";32;25;6;24
+5;"Abdomen";6;"Columna vertebral";"AIS 5-6";"AIS 1-2";56;51;11;21,5686274509804
+5;"Abdomen";6;"Columna vertebral";"AIS 5-6";"AIS 3-4";18;16;8;50
+5;"Abdomen";6;"Columna vertebral";"AIS 5-6";"AIS 5-6";8;5;0;0
+5;"Abdomen";7;"Extremidades superiores";"AIS 1-2";"AIS 1-2";507;478;41;8,57740585774058
+5;"Abdomen";7;"Extremidades superiores";"AIS 1-2";"AIS 3-4";58;57;5;8,7719298245614
+5;"Abdomen";7;"Extremidades superiores";"AIS 1-2";"AIS 5-6";0;0;0;
+5;"Abdomen";7;"Extremidades superiores";"AIS 3-4";"AIS 1-2";573;547;53;9,68921389396709
+5;"Abdomen";7;"Extremidades superiores";"AIS 3-4";"AIS 3-4";70;66;9;13,6363636363636
+5;"Abdomen";7;"Extremidades superiores";"AIS 3-4";"AIS 5-6";0;0;0;
+5;"Abdomen";7;"Extremidades superiores";"AIS 5-6";"AIS 1-2";61;57;7;12,280701754386
+5;"Abdomen";7;"Extremidades superiores";"AIS 5-6";"AIS 3-4";11;8;3;37,5
+5;"Abdomen";7;"Extremidades superiores";"AIS 5-6";"AIS 5-6";0;0;0;
+5;"Abdomen";8;"Extremidades inferiores";"AIS 1-2";"AIS 1-2";315;299;22;7,35785953177258
+5;"Abdomen";8;"Extremidades inferiores";"AIS 1-2";"AIS 3-4";347;332;25;7,53012048192771
+5;"Abdomen";8;"Extremidades inferiores";"AIS 1-2";"AIS 5-6";63;61;12;19,672131147541
+5;"Abdomen";8;"Extremidades inferiores";"AIS 3-4";"AIS 1-2";290;279;31;11,1111111111111
+5;"Abdomen";8;"Extremidades inferiores";"AIS 3-4";"AIS 3-4";440;416;56;13,4615384615385
+5;"Abdomen";8;"Extremidades inferiores";"AIS 3-4";"AIS 5-6";99;98;30;30,6122448979592
+5;"Abdomen";8;"Extremidades inferiores";"AIS 5-6";"AIS 1-2";38;36;6;16,6666666666667
+5;"Abdomen";8;"Extremidades inferiores";"AIS 5-6";"AIS 3-4";32;30;11;36,6666666666667
+5;"Abdomen";8;"Extremidades inferiores";"AIS 5-6";"AIS 5-6";16;14;10;71,4285714285714
+5;"Abdomen";9;"Piel y partes blandas";"AIS 1-2";"AIS 1-2";77;71;9;12,6760563380282
+5;"Abdomen";9;"Piel y partes blandas";"AIS 1-2";"AIS 3-4";1;1;0;0
+5;"Abdomen";9;"Piel y partes blandas";"AIS 1-2";"AIS 5-6";2;2;2;100
+5;"Abdomen";9;"Piel y partes blandas";"AIS 3-4";"AIS 1-2";71;66;6;9,09090909090909
+5;"Abdomen";9;"Piel y partes blandas";"AIS 3-4";"AIS 3-4";2;2;2;100
+5;"Abdomen";9;"Piel y partes blandas";"AIS 3-4";"AIS 5-6";2;2;2;100
+5;"Abdomen";9;"Piel y partes blandas";"AIS 5-6";"AIS 1-2";4;4;1;25
+5;"Abdomen";9;"Piel y partes blandas";"AIS 5-6";"AIS 3-4";0;0;0;
+5;"Abdomen";9;"Piel y partes blandas";"AIS 5-6";"AIS 5-6";0;0;0;
+6;"Columna vertebral";7;"Extremidades superiores";"AIS 1-2";"AIS 1-2";1147;1100;98;8,90909090909091
+6;"Columna vertebral";7;"Extremidades superiores";"AIS 1-2";"AIS 3-4";125;120;13;10,8333333333333
+6;"Columna vertebral";7;"Extremidades superiores";"AIS 1-2";"AIS 5-6";0;0;0;
+6;"Columna vertebral";7;"Extremidades superiores";"AIS 3-4";"AIS 1-2";358;322;36;11,1801242236025
+6;"Columna vertebral";7;"Extremidades superiores";"AIS 3-4";"AIS 3-4";35;32;6;18,75
+6;"Columna vertebral";7;"Extremidades superiores";"AIS 3-4";"AIS 5-6";0;0;0;
+6;"Columna vertebral";7;"Extremidades superiores";"AIS 5-6";"AIS 1-2";83;62;14;22,5806451612903
+6;"Columna vertebral";7;"Extremidades superiores";"AIS 5-6";"AIS 3-4";12;11;4;36,3636363636364
+6;"Columna vertebral";7;"Extremidades superiores";"AIS 5-6";"AIS 5-6";0;0;0;
+6;"Columna vertebral";8;"Extremidades inferiores";"AIS 1-2";"AIS 1-2";572;542;44;8,11808118081181
+6;"Columna vertebral";8;"Extremidades inferiores";"AIS 1-2";"AIS 3-4";837;803;59;7,34744707347447
+6;"Columna vertebral";8;"Extremidades inferiores";"AIS 1-2";"AIS 5-6";155;154;48;31,1688311688312
+6;"Columna vertebral";8;"Extremidades inferiores";"AIS 3-4";"AIS 1-2";214;201;12;5,97014925373134
+6;"Columna vertebral";8;"Extremidades inferiores";"AIS 3-4";"AIS 3-4";271;255;32;12,5490196078431
+6;"Columna vertebral";8;"Extremidades inferiores";"AIS 3-4";"AIS 5-6";50;46;16;34,7826086956522
+6;"Columna vertebral";8;"Extremidades inferiores";"AIS 5-6";"AIS 1-2";38;29;5;17,2413793103448
+6;"Columna vertebral";8;"Extremidades inferiores";"AIS 5-6";"AIS 3-4";40;36;8;22,2222222222222
+6;"Columna vertebral";8;"Extremidades inferiores";"AIS 5-6";"AIS 5-6";4;4;2;50
+6;"Columna vertebral";9;"Piel y partes blandas";"AIS 1-2";"AIS 1-2";123;112;16;14,2857142857143
+6;"Columna vertebral";9;"Piel y partes blandas";"AIS 1-2";"AIS 3-4";4;4;2;50
+6;"Columna vertebral";9;"Piel y partes blandas";"AIS 1-2";"AIS 5-6";2;2;2;100
+6;"Columna vertebral";9;"Piel y partes blandas";"AIS 3-4";"AIS 1-2";48;42;7;16,6666666666667
+6;"Columna vertebral";9;"Piel y partes blandas";"AIS 3-4";"AIS 3-4";0;0;0;
+6;"Columna vertebral";9;"Piel y partes blandas";"AIS 3-4";"AIS 5-6";0;0;0;
+6;"Columna vertebral";9;"Piel y partes blandas";"AIS 5-6";"AIS 1-2";11;9;2;22,2222222222222
+6;"Columna vertebral";9;"Piel y partes blandas";"AIS 5-6";"AIS 3-4";0;0;0;
+6;"Columna vertebral";9;"Piel y partes blandas";"AIS 5-6";"AIS 5-6";2;1;1;100
+7;"Extremidades superiores";8;"Extremidades inferiores";"AIS 1-2";"AIS 1-2";780;746;50;6,70241286863271
+7;"Extremidades superiores";8;"Extremidades inferiores";"AIS 1-2";"AIS 3-4";989;942;90;9,55414012738854
+7;"Extremidades superiores";8;"Extremidades inferiores";"AIS 1-2";"AIS 5-6";111;110;35;31,8181818181818
+7;"Extremidades superiores";8;"Extremidades inferiores";"AIS 3-4";"AIS 1-2";97;93;10;10,752688172043
+7;"Extremidades superiores";8;"Extremidades inferiores";"AIS 3-4";"AIS 3-4";168;158;13;8,22784810126582
+7;"Extremidades superiores";8;"Extremidades inferiores";"AIS 3-4";"AIS 5-6";24;22;6;27,2727272727273
+7;"Extremidades superiores";8;"Extremidades inferiores";"AIS 5-6";"AIS 1-2";0;0;0;
+7;"Extremidades superiores";8;"Extremidades inferiores";"AIS 5-6";"AIS 3-4";0;0;0;
+7;"Extremidades superiores";8;"Extremidades inferiores";"AIS 5-6";"AIS 5-6";0;0;0;
+7;"Extremidades superiores";9;"Piel y partes blandas";"AIS 1-2";"AIS 1-2";170;158;14;8,86075949367089
+7;"Extremidades superiores";9;"Piel y partes blandas";"AIS 1-2";"AIS 3-4";5;5;1;20
+7;"Extremidades superiores";9;"Piel y partes blandas";"AIS 1-2";"AIS 5-6";4;2;2;100
+7;"Extremidades superiores";9;"Piel y partes blandas";"AIS 3-4";"AIS 1-2";31;30;0;0
+7;"Extremidades superiores";9;"Piel y partes blandas";"AIS 3-4";"AIS 3-4";2;2;0;0
+7;"Extremidades superiores";9;"Piel y partes blandas";"AIS 3-4";"AIS 5-6";1;1;1;100
+7;"Extremidades superiores";9;"Piel y partes blandas";"AIS 5-6";"AIS 1-2";0;0;0;
+7;"Extremidades superiores";9;"Piel y partes blandas";"AIS 5-6";"AIS 3-4";0;0;0;
+7;"Extremidades superiores";9;"Piel y partes blandas";"AIS 5-6";"AIS 5-6";0;0;0;
+8;"Extremidades inferiores";9;"Piel y partes blandas";"AIS 1-2";"AIS 1-2";110;100;9;9
+8;"Extremidades inferiores";9;"Piel y partes blandas";"AIS 1-2";"AIS 3-4";2;2;0;0
+8;"Extremidades inferiores";9;"Piel y partes blandas";"AIS 1-2";"AIS 5-6";1;1;1;100
+8;"Extremidades inferiores";9;"Piel y partes blandas";"AIS 3-4";"AIS 1-2";137;128;12;9,375
+8;"Extremidades inferiores";9;"Piel y partes blandas";"AIS 3-4";"AIS 3-4";7;7;2;28,5714285714286
+8;"Extremidades inferiores";9;"Piel y partes blandas";"AIS 3-4";"AIS 5-6";2;2;2;100
+8;"Extremidades inferiores";9;"Piel y partes blandas";"AIS 5-6";"AIS 1-2";14;14;4;28,5714285714286
+8;"Extremidades inferiores";9;"Piel y partes blandas";"AIS 5-6";"AIS 3-4";1;1;1;100
+8;"Extremidades inferiores";9;"Piel y partes blandas";"AIS 5-6";"AIS 5-6";0;0;0;

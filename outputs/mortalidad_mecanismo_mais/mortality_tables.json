@@ -1,0 +1,802 @@
+{
+  "periods": [
+    "2015-2019",
+    "2020-2025"
+  ],
+  "mechanism_table": [
+    {
+      "mechanism": "caida accidental",
+      "2015-2019": {
+        "n": 2059,
+        "deaths": 461,
+        "mortality": 0.22389509470616803
+      },
+      "2020-2025": {
+        "n": 1953,
+        "deaths": 378,
+        "mortality": 0.1935483870967742
+      }
+    },
+    {
+      "mechanism": "moto",
+      "2015-2019": {
+        "n": 1404,
+        "deaths": 82,
+        "mortality": 0.0584045584045584
+      },
+      "2020-2025": {
+        "n": 1461,
+        "deaths": 93,
+        "mortality": 0.06365503080082136
+      }
+    },
+    {
+      "mechanism": "coche",
+      "2015-2019": {
+        "n": 1415,
+        "deaths": 119,
+        "mortality": 0.08409893992932863
+      },
+      "2020-2025": {
+        "n": 1183,
+        "deaths": 98,
+        "mortality": 0.08284023668639054
+      }
+    },
+    {
+      "mechanism": "precipitacion",
+      "2015-2019": {
+        "n": 1261,
+        "deaths": 164,
+        "mortality": 0.13005551149881048
+      },
+      "2020-2025": {
+        "n": 1325,
+        "deaths": 158,
+        "mortality": 0.11924528301886793
+      }
+    },
+    {
+      "mechanism": "atropello",
+      "2015-2019": {
+        "n": 758,
+        "deaths": 145,
+        "mortality": 0.19129287598944592
+      },
+      "2020-2025": {
+        "n": 680,
+        "deaths": 135,
+        "mortality": 0.19852941176470587
+      }
+    },
+    {
+      "mechanism": "bici",
+      "2015-2019": {
+        "n": 496,
+        "deaths": 29,
+        "mortality": 0.05846774193548387
+      },
+      "2020-2025": {
+        "n": 558,
+        "deaths": 38,
+        "mortality": 0.06810035842293907
+      }
+    },
+    {
+      "mechanism": "otros/desconocido",
+      "2015-2019": {
+        "n": 366,
+        "deaths": 56,
+        "mortality": 0.15300546448087432
+      },
+      "2020-2025": {
+        "n": 454,
+        "deaths": 51,
+        "mortality": 0.11233480176211454
+      }
+    },
+    {
+      "mechanism": "arma blanca",
+      "2015-2019": {
+        "n": 263,
+        "deaths": 12,
+        "mortality": 0.045627376425855515
+      },
+      "2020-2025": {
+        "n": 374,
+        "deaths": 13,
+        "mortality": 0.034759358288770054
+      }
+    },
+    {
+      "mechanism": "golpeo con objeto",
+      "2015-2019": {
+        "n": 280,
+        "deaths": 21,
+        "mortality": 0.075
+      },
+      "2020-2025": {
+        "n": 340,
+        "deaths": 30,
+        "mortality": 0.08823529411764706
+      }
+    },
+    {
+      "mechanism": "otros vehiculos",
+      "2015-2019": {
+        "n": 197,
+        "deaths": 17,
+        "mortality": 0.08629441624365482
+      },
+      "2020-2025": {
+        "n": 345,
+        "deaths": 25,
+        "mortality": 0.07246376811594203
+      }
+    },
+    {
+      "mechanism": "aplastamiento",
+      "2015-2019": {
+        "n": 154,
+        "deaths": 11,
+        "mortality": 0.07142857142857142
+      },
+      "2020-2025": {
+        "n": 198,
+        "deaths": 10,
+        "mortality": 0.050505050505050504
+      }
+    },
+    {
+      "mechanism": "arma de fuego",
+      "2015-2019": {
+        "n": 58,
+        "deaths": 17,
+        "mortality": 0.29310344827586204
+      },
+      "2020-2025": {
+        "n": 68,
+        "deaths": 18,
+        "mortality": 0.2647058823529412
+      }
+    },
+    {
+      "mechanism": "asta de toro",
+      "2015-2019": {
+        "n": 42,
+        "deaths": 3,
+        "mortality": 0.07142857142857142
+      },
+      "2020-2025": {
+        "n": 43,
+        "deaths": 4,
+        "mortality": 0.09302325581395349
+      }
+    },
+    {
+      "mechanism": "accidente por zambullida",
+      "2015-2019": {
+        "n": 38,
+        "deaths": 6,
+        "mortality": 0.15789473684210525
+      },
+      "2020-2025": {
+        "n": 38,
+        "deaths": 2,
+        "mortality": 0.05263157894736842
+      }
+    },
+    {
+      "mechanism": "explosion",
+      "2015-2019": {
+        "n": 23,
+        "deaths": 3,
+        "mortality": 0.13043478260869565
+      },
+      "2020-2025": {
+        "n": 40,
+        "deaths": 10,
+        "mortality": 0.25
+      }
+    },
+    {
+      "mechanism": "vehiculo movilidad unipersonal",
+      "2015-2019": {
+        "n": 0,
+        "deaths": 0,
+        "mortality": null
+      },
+      "2020-2025": {
+        "n": 30,
+        "deaths": 2,
+        "mortality": 0.06666666666666667
+      }
+    }
+  ],
+  "mais_table": [
+    {
+      "region": "Cabeza",
+      "severity": "Total MAIS ≥1",
+      "2015-2019": {
+        "n": 5396,
+        "deaths": 977,
+        "mortality": 0.18106004447739066
+      },
+      "2020-2025": {
+        "n": 5231,
+        "deaths": 876,
+        "mortality": 0.16746320015293442
+      }
+    },
+    {
+      "region": "Cabeza",
+      "severity": "MAIS 1",
+      "2015-2019": {
+        "n": 304,
+        "deaths": 14,
+        "mortality": 0.046052631578947366
+      },
+      "2020-2025": {
+        "n": 308,
+        "deaths": 11,
+        "mortality": 0.03571428571428571
+      }
+    },
+    {
+      "region": "Cabeza",
+      "severity": "MAIS 2",
+      "2015-2019": {
+        "n": 1013,
+        "deaths": 48,
+        "mortality": 0.04738400789733465
+      },
+      "2020-2025": {
+        "n": 1030,
+        "deaths": 50,
+        "mortality": 0.04854368932038835
+      }
+    },
+    {
+      "region": "Cabeza",
+      "severity": "MAIS 3",
+      "2015-2019": {
+        "n": 1602,
+        "deaths": 117,
+        "mortality": 0.07303370786516854
+      },
+      "2020-2025": {
+        "n": 1557,
+        "deaths": 106,
+        "mortality": 0.0680796403339756
+      }
+    },
+    {
+      "region": "Cabeza",
+      "severity": "MAIS 4",
+      "2015-2019": {
+        "n": 1187,
+        "deaths": 192,
+        "mortality": 0.16175231676495366
+      },
+      "2020-2025": {
+        "n": 1127,
+        "deaths": 185,
+        "mortality": 0.16415261756876665
+      }
+    },
+    {
+      "region": "Cabeza",
+      "severity": "MAIS 5",
+      "2015-2019": {
+        "n": 1268,
+        "deaths": 586,
+        "mortality": 0.46214511041009465
+      },
+      "2020-2025": {
+        "n": 1168,
+        "deaths": 485,
+        "mortality": 0.4152397260273973
+      }
+    },
+    {
+      "region": "Cabeza",
+      "severity": "MAIS 6",
+      "2015-2019": {
+        "n": 22,
+        "deaths": 20,
+        "mortality": 0.9090909090909091
+      },
+      "2020-2025": {
+        "n": 41,
+        "deaths": 39,
+        "mortality": 0.9512195121951219
+      }
+    },
+    {
+      "region": "Extremidad superior",
+      "severity": "Total MAIS ≥1",
+      "2015-2019": {
+        "n": 1886,
+        "deaths": 232,
+        "mortality": 0.12301166489925769
+      },
+      "2020-2025": {
+        "n": 1952,
+        "deaths": 240,
+        "mortality": 0.12295081967213115
+      }
+    },
+    {
+      "region": "Extremidad superior",
+      "severity": "MAIS 1",
+      "2015-2019": {
+        "n": 701,
+        "deaths": 71,
+        "mortality": 0.10128388017118402
+      },
+      "2020-2025": {
+        "n": 697,
+        "deaths": 66,
+        "mortality": 0.09469153515064563
+      }
+    },
+    {
+      "region": "Extremidad superior",
+      "severity": "MAIS 2",
+      "2015-2019": {
+        "n": 924,
+        "deaths": 117,
+        "mortality": 0.1266233766233766
+      },
+      "2020-2025": {
+        "n": 987,
+        "deaths": 127,
+        "mortality": 0.1286727456940223
+      }
+    },
+    {
+      "region": "Extremidad superior",
+      "severity": "MAIS 3",
+      "2015-2019": {
+        "n": 227,
+        "deaths": 31,
+        "mortality": 0.13656387665198239
+      },
+      "2020-2025": {
+        "n": 245,
+        "deaths": 41,
+        "mortality": 0.1673469387755102
+      }
+    },
+    {
+      "region": "Extremidad superior",
+      "severity": "MAIS 4",
+      "2015-2019": {
+        "n": 34,
+        "deaths": 13,
+        "mortality": 0.38235294117647056
+      },
+      "2020-2025": {
+        "n": 22,
+        "deaths": 6,
+        "mortality": 0.2727272727272727
+      }
+    },
+    {
+      "region": "Extremidad superior",
+      "severity": "MAIS 5",
+      "2015-2019": {
+        "n": 0,
+        "deaths": 0,
+        "mortality": null
+      },
+      "2020-2025": {
+        "n": 1,
+        "deaths": 0,
+        "mortality": 0.0
+      }
+    },
+    {
+      "region": "Tórax",
+      "severity": "Total MAIS ≥1",
+      "2015-2019": {
+        "n": 4603,
+        "deaths": 482,
+        "mortality": 0.10471431674994569
+      },
+      "2020-2025": {
+        "n": 4763,
+        "deaths": 480,
+        "mortality": 0.10077682133109385
+      }
+    },
+    {
+      "region": "Tórax",
+      "severity": "MAIS 1",
+      "2015-2019": {
+        "n": 171,
+        "deaths": 14,
+        "mortality": 0.08187134502923976
+      },
+      "2020-2025": {
+        "n": 187,
+        "deaths": 17,
+        "mortality": 0.09090909090909091
+      }
+    },
+    {
+      "region": "Tórax",
+      "severity": "MAIS 2",
+      "2015-2019": {
+        "n": 953,
+        "deaths": 75,
+        "mortality": 0.07869884575026233
+      },
+      "2020-2025": {
+        "n": 931,
+        "deaths": 70,
+        "mortality": 0.07518796992481203
+      }
+    },
+    {
+      "region": "Tórax",
+      "severity": "MAIS 3",
+      "2015-2019": {
+        "n": 2125,
+        "deaths": 164,
+        "mortality": 0.07717647058823529
+      },
+      "2020-2025": {
+        "n": 2366,
+        "deaths": 217,
+        "mortality": 0.09171597633136094
+      }
+    },
+    {
+      "region": "Tórax",
+      "severity": "MAIS 4",
+      "2015-2019": {
+        "n": 962,
+        "deaths": 148,
+        "mortality": 0.15384615384615385
+      },
+      "2020-2025": {
+        "n": 891,
+        "deaths": 97,
+        "mortality": 0.10886644219977554
+      }
+    },
+    {
+      "region": "Tórax",
+      "severity": "MAIS 5",
+      "2015-2019": {
+        "n": 384,
+        "deaths": 80,
+        "mortality": 0.20833333333333334
+      },
+      "2020-2025": {
+        "n": 382,
+        "deaths": 73,
+        "mortality": 0.19109947643979058
+      }
+    },
+    {
+      "region": "Tórax",
+      "severity": "MAIS 6",
+      "2015-2019": {
+        "n": 8,
+        "deaths": 1,
+        "mortality": 0.125
+      },
+      "2020-2025": {
+        "n": 6,
+        "deaths": 6,
+        "mortality": 1.0
+      }
+    },
+    {
+      "region": "Abdomen",
+      "severity": "Total MAIS ≥1",
+      "2015-2019": {
+        "n": 2530,
+        "deaths": 240,
+        "mortality": 0.09486166007905138
+      },
+      "2020-2025": {
+        "n": 2746,
+        "deaths": 242,
+        "mortality": 0.08812818645302258
+      }
+    },
+    {
+      "region": "Abdomen",
+      "severity": "MAIS 1",
+      "2015-2019": {
+        "n": 75,
+        "deaths": 3,
+        "mortality": 0.04
+      },
+      "2020-2025": {
+        "n": 93,
+        "deaths": 4,
+        "mortality": 0.043010752688172046
+      }
+    },
+    {
+      "region": "Abdomen",
+      "severity": "MAIS 2",
+      "2015-2019": {
+        "n": 1178,
+        "deaths": 93,
+        "mortality": 0.07894736842105263
+      },
+      "2020-2025": {
+        "n": 1155,
+        "deaths": 95,
+        "mortality": 0.08225108225108226
+      }
+    },
+    {
+      "region": "Abdomen",
+      "severity": "MAIS 3",
+      "2015-2019": {
+        "n": 776,
+        "deaths": 66,
+        "mortality": 0.08505154639175258
+      },
+      "2020-2025": {
+        "n": 894,
+        "deaths": 55,
+        "mortality": 0.06152125279642058
+      }
+    },
+    {
+      "region": "Abdomen",
+      "severity": "MAIS 4",
+      "2015-2019": {
+        "n": 381,
+        "deaths": 45,
+        "mortality": 0.11811023622047244
+      },
+      "2020-2025": {
+        "n": 463,
+        "deaths": 58,
+        "mortality": 0.12526997840172785
+      }
+    },
+    {
+      "region": "Abdomen",
+      "severity": "MAIS 5",
+      "2015-2019": {
+        "n": 118,
+        "deaths": 31,
+        "mortality": 0.2627118644067797
+      },
+      "2020-2025": {
+        "n": 141,
+        "deaths": 30,
+        "mortality": 0.2127659574468085
+      }
+    },
+    {
+      "region": "Abdomen",
+      "severity": "MAIS 6",
+      "2015-2019": {
+        "n": 2,
+        "deaths": 2,
+        "mortality": 1.0
+      },
+      "2020-2025": {
+        "n": 0,
+        "deaths": 0,
+        "mortality": null
+      }
+    },
+    {
+      "region": "Extremidad inferior",
+      "severity": "Total MAIS ≥1",
+      "2015-2019": {
+        "n": 3998,
+        "deaths": 346,
+        "mortality": 0.0865432716358179
+      },
+      "2020-2025": {
+        "n": 4092,
+        "deaths": 360,
+        "mortality": 0.08797653958944282
+      }
+    },
+    {
+      "region": "Extremidad inferior",
+      "severity": "MAIS 1",
+      "2015-2019": {
+        "n": 280,
+        "deaths": 22,
+        "mortality": 0.07857142857142857
+      },
+      "2020-2025": {
+        "n": 249,
+        "deaths": 23,
+        "mortality": 0.09236947791164658
+      }
+    },
+    {
+      "region": "Extremidad inferior",
+      "severity": "MAIS 2",
+      "2015-2019": {
+        "n": 1970,
+        "deaths": 131,
+        "mortality": 0.066497461928934
+      },
+      "2020-2025": {
+        "n": 1977,
+        "deaths": 144,
+        "mortality": 0.07283763277693475
+      }
+    },
+    {
+      "region": "Extremidad inferior",
+      "severity": "MAIS 3",
+      "2015-2019": {
+        "n": 1124,
+        "deaths": 93,
+        "mortality": 0.08274021352313167
+      },
+      "2020-2025": {
+        "n": 1220,
+        "deaths": 97,
+        "mortality": 0.07950819672131147
+      }
+    },
+    {
+      "region": "Extremidad inferior",
+      "severity": "MAIS 4",
+      "2015-2019": {
+        "n": 435,
+        "deaths": 31,
+        "mortality": 0.07126436781609195
+      },
+      "2020-2025": {
+        "n": 473,
+        "deaths": 49,
+        "mortality": 0.10359408033826638
+      }
+    },
+    {
+      "region": "Extremidad inferior",
+      "severity": "MAIS 5",
+      "2015-2019": {
+        "n": 189,
+        "deaths": 69,
+        "mortality": 0.36507936507936506
+      },
+      "2020-2025": {
+        "n": 173,
+        "deaths": 47,
+        "mortality": 0.27167630057803466
+      }
+    },
+    {
+      "region": "Externa/térmica",
+      "severity": "Total MAIS ≥1",
+      "2015-2019": {
+        "n": 335,
+        "deaths": 41,
+        "mortality": 0.12238805970149254
+      },
+      "2020-2025": {
+        "n": 642,
+        "deaths": 83,
+        "mortality": 0.1292834890965732
+      }
+    },
+    {
+      "region": "Externa/térmica",
+      "severity": "MAIS 1",
+      "2015-2019": {
+        "n": 237,
+        "deaths": 19,
+        "mortality": 0.08016877637130802
+      },
+      "2020-2025": {
+        "n": 515,
+        "deaths": 49,
+        "mortality": 0.09514563106796116
+      }
+    },
+    {
+      "region": "Externa/térmica",
+      "severity": "MAIS 2",
+      "2015-2019": {
+        "n": 19,
+        "deaths": 1,
+        "mortality": 0.05263157894736842
+      },
+      "2020-2025": {
+        "n": 31,
+        "deaths": 2,
+        "mortality": 0.06451612903225806
+      }
+    },
+    {
+      "region": "Externa/térmica",
+      "severity": "MAIS 3",
+      "2015-2019": {
+        "n": 29,
+        "deaths": 2,
+        "mortality": 0.06896551724137931
+      },
+      "2020-2025": {
+        "n": 46,
+        "deaths": 2,
+        "mortality": 0.043478260869565216
+      }
+    },
+    {
+      "region": "Externa/térmica",
+      "severity": "MAIS 4",
+      "2015-2019": {
+        "n": 21,
+        "deaths": 3,
+        "mortality": 0.14285714285714285
+      },
+      "2020-2025": {
+        "n": 12,
+        "deaths": 4,
+        "mortality": 0.3333333333333333
+      }
+    },
+    {
+      "region": "Externa/térmica",
+      "severity": "MAIS 5",
+      "2015-2019": {
+        "n": 28,
+        "deaths": 15,
+        "mortality": 0.5357142857142857
+      },
+      "2020-2025": {
+        "n": 35,
+        "deaths": 23,
+        "mortality": 0.6571428571428571
+      }
+    },
+    {
+      "region": "Externa/térmica",
+      "severity": "MAIS 6",
+      "2015-2019": {
+        "n": 1,
+        "deaths": 1,
+        "mortality": 1.0
+      },
+      "2020-2025": {
+        "n": 3,
+        "deaths": 3,
+        "mortality": 1.0
+      }
+    }
+  ],
+  "audit": {
+    "deaths_30d_2015-2019": 1146,
+    "deaths_30d_2020-2025": 1065,
+    "eligible_inhospital_2015-2019": 8821,
+    "eligible_inhospital_2020-2025": 9095,
+    "invalid_or_missing_trauma_date": 10,
+    "known_30d_2015-2019": 8814,
+    "known_30d_2020-2025": 9092,
+    "missing_mechanism_2020-2025": 2,
+    "outside_period": 1,
+    "rows_2015-2019": 9411,
+    "rows_2020-2025": 9613,
+    "source_rows": 19035,
+    "unknown_30d_2015-2019": 7,
+    "unknown_30d_2020-2025": 3,
+    "unknown_inhospital_2015-2019": 590,
+    "unknown_inhospital_2020-2025": 518
+  },
+  "definitions": {
+    "outcome": "Mortalidad a 30 días desde la fecha del trauma, según clean_retrauci.Rmd.",
+    "mechanism": "Categorías originales normalizadas; otro/otros/desconocido se agrupan como otros/desconocido.",
+    "mais": "MAIS regional: cabeza=mais1, extremidad superior=mais2, tórax=mais3, abdomen=mais4, extremidad inferior=mais5, externa/térmica=mais6. Los vacíos se interpretan como 0.",
+    "denominator": "Pacientes con desenlace de mortalidad a 30 días conocido dentro de cada categoría."
+  }
+}

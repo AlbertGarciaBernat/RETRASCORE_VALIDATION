@@ -1,0 +1,242 @@
+---
+title: "Completar regiones AIS de las lesiones"
+date: "`r format(Sys.Date(), '%Y-%m-%d')`"
+output:
+  html_document:
+    toc: true
+    number_sections: true
+    self_contained: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+try(Sys.setlocale("LC_CTYPE", "English_United States.utf8"), silent = TRUE)
+```
+
+# Objetivo
+
+Este documento carga `retrauci.csv`, identifica las columnas
+`lesion_X_nombre` y `lesion_X_region_ais`, y completa únicamente las regiones
+AIS vacías. La región se obtiene del texto situado antes de la primera `/` en
+el nombre de la lesión. Los valores de región que ya estaban informados se
+conservan sin cambios.
+
+# Carga y comprobación de columnas
+
+```{r cargar-datos}
+archivo_entrada <- "retrauci.csv"
+archivo_salida <- "retrauci_regiones_ais_completas.csv"
+
+if (!file.exists(archivo_entrada)) {
+  stop("No se encuentra el archivo ", archivo_entrada, ".")
+}
+
+# Todas las columnas se leen como texto para conservar fechas, identificadores,
+# decimales y valores especiales exactamente como aparecen en el CSV original.
+datos <- read.csv2(
+  archivo_entrada,
+  stringsAsFactors = FALSE,
+  check.names = FALSE,
+  colClasses = "character",
+  na.strings = NULL
+)
+
+columnas_nombre <- grep(
+  "^lesion_[0-9]+_nombre$", names(datos), value = TRUE
+)
+indices_lesion <- as.integer(sub(
+  "^lesion_([0-9]+)_nombre$", "\\1", columnas_nombre
+))
+columnas_nombre <- columnas_nombre[order(indices_lesion)]
+columnas_region <- sub("_nombre$", "_region_ais", columnas_nombre)
+
+columnas_region_ausentes <- setdiff(columnas_region, names(datos))
+if (length(columnas_region_ausentes)) {
+  stop(
+    "Faltan las siguientes columnas de región: ",
+    paste(columnas_region_ausentes, collapse = ", ")
+  )
+}
+
+if (length(columnas_nombre) != 32L) {
+  stop(
+    "Se esperaban 32 parejas de columnas de lesión y se encontraron ",
+    length(columnas_nombre), "."
+  )
+}
+
+data.frame(
+  filas = nrow(datos),
+  columnas = ncol(datos),
+  parejas_de_lesion = length(columnas_nombre)
+)
+```
+
+# Correspondencia entre texto y región AIS
+
+```{r correspondencia-regiones}
+# Se mantiene la grafía exacta encontrada en lesion_X_nombre, incluida
+# "Extemidades Inferiores", que aparece así en el archivo original.
+mapa_regiones <- c(
+  "Craneo" = "1",
+  "Cara" = "2",
+  "Cuello" = "3",
+  "Torax" = "4",
+  "Abdomen" = "5",
+  "Columna Vertebral" = "6",
+  "Extremidades Superiores" = "7",
+  "Extemidades Inferiores" = "8",
+  "Piel y Partes Blandas" = "9"
+)
+
+extraer_region_texto <- function(nombre_lesion) {
+  nombre_lesion <- trimws(nombre_lesion)
+  tiene_nombre <- nzchar(nombre_lesion) & nombre_lesion != "NA"
+  region <- rep(NA_character_, length(nombre_lesion))
+  region[tiene_nombre] <- trimws(sub("/.*$", "", nombre_lesion[tiene_nombre]))
+  region[!is.na(region) & !nzchar(region)] <- NA_character_
+  region
+}
+
+regiones_texto <- unique(unlist(lapply(
+  columnas_nombre,
+  function(columna) extraer_region_texto(datos[[columna]])
+)))
+regiones_texto <- sort(regiones_texto[!is.na(regiones_texto)])
+
+regiones_no_mapeadas <- setdiff(regiones_texto, names(mapa_regiones))
+regiones_no_observadas <- setdiff(names(mapa_regiones), regiones_texto)
+if (length(regiones_no_mapeadas) || length(regiones_no_observadas)) {
+  stop(
+    "Las regiones del archivo no coinciden con las nueve regiones esperadas. ",
+    "No mapeadas: ", paste(regiones_no_mapeadas, collapse = ", "),
+    ". No observadas: ", paste(regiones_no_observadas, collapse = ", "), "."
+  )
+}
+
+knitr::kable(
+  data.frame(
+    texto_en_nombre = names(mapa_regiones),
+    region_ais = unname(mapa_regiones),
+    row.names = NULL
+  ),
+  caption = "Correspondencia utilizada para completar las regiones AIS"
+)
+```
+
+# Completar las regiones vacías
+
+```{r completar-regiones}
+regiones_originales <- datos[columnas_region]
+resumen_relleno <- vector("list", length(columnas_nombre))
+
+for (i in seq_along(columnas_nombre)) {
+  nombre <- datos[[columnas_nombre[i]]]
+  region <- datos[[columnas_region[i]]]
+  region_texto <- extraer_region_texto(nombre)
+
+  region_vacia <- is.na(region) | !nzchar(trimws(region)) | region == "NA"
+  nombre_disponible <- !is.na(region_texto)
+  rellenar <- region_vacia & nombre_disponible
+
+  region_calculada <- unname(mapa_regiones[region_texto[rellenar]])
+  if (anyNA(region_calculada)) {
+    stop("Se encontró una región sin correspondencia en ", columnas_nombre[i], ".")
+  }
+
+  datos[[columnas_region[i]]][rellenar] <- region_calculada
+  resumen_relleno[[i]] <- data.frame(
+    lesion = sub("^lesion_([0-9]+)_nombre$", "\\1", columnas_nombre[i]),
+    celdas_rellenadas = sum(rellenar),
+    stringsAsFactors = FALSE
+  )
+}
+
+resumen_relleno <- do.call(rbind, resumen_relleno)
+total_rellenado <- sum(resumen_relleno$celdas_rellenadas)
+
+knitr::kable(
+  resumen_relleno,
+  caption = "Número de regiones AIS completadas por posición de lesión"
+)
+
+data.frame(total_celdas_rellenadas = total_rellenado)
+```
+
+# Validación y exportación
+
+```{r validar-exportar}
+# Ningún valor previamente informado debe haber cambiado.
+valores_existentes_modificados <- 0L
+regiones_vacias_con_nombre <- 0L
+
+for (i in seq_along(columnas_region)) {
+  antes <- regiones_originales[[columnas_region[i]]]
+  despues <- datos[[columnas_region[i]]]
+  tenia_valor <- !is.na(antes) & nzchar(trimws(antes)) & antes != "NA"
+
+  valores_existentes_modificados <- valores_existentes_modificados + sum(
+    despues[tenia_valor] != antes[tenia_valor]
+  )
+
+  region_texto <- extraer_region_texto(datos[[columnas_nombre[i]]])
+  sigue_vacia <- is.na(despues) | !nzchar(trimws(despues)) | despues == "NA"
+  regiones_vacias_con_nombre <- regiones_vacias_con_nombre + sum(
+    sigue_vacia & !is.na(region_texto)
+  )
+}
+
+stopifnot(
+  valores_existentes_modificados == 0L,
+  regiones_vacias_con_nombre == 0L
+)
+
+# El separador sigue siendo punto y coma, como en el archivo de origen.
+write.table(
+  datos,
+  file = archivo_salida,
+  sep = ";",
+  dec = ",",
+  row.names = FALSE,
+  col.names = TRUE,
+  quote = TRUE,
+  na = ""
+)
+
+# Relectura independiente del archivo exportado.
+datos_verificacion <- read.csv2(
+  archivo_salida,
+  stringsAsFactors = FALSE,
+  check.names = FALSE,
+  colClasses = "character",
+  na.strings = NULL
+)
+
+stopifnot(
+  nrow(datos_verificacion) == nrow(datos),
+  identical(names(datos_verificacion), names(datos)),
+  identical(datos_verificacion, datos)
+)
+
+knitr::kable(
+  data.frame(
+    comprobacion = c(
+      "Filas conservadas",
+      "Columnas conservadas",
+      "Celdas de región completadas",
+      "Valores de región existentes modificados",
+      "Regiones vacías con nombre de lesión"
+    ),
+    resultado = c(
+      nrow(datos_verificacion),
+      ncol(datos_verificacion),
+      total_rellenado,
+      valores_existentes_modificados,
+      regiones_vacias_con_nombre
+    )
+  ),
+  caption = "Comprobaciones del archivo exportado"
+)
+```
+
+El archivo generado es `r archivo_salida`.

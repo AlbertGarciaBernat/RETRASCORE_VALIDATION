@@ -781,3 +781,166 @@ doi:10.1186/s13054-021-03845-6.
 ```{r session-info}
 sessionInfo()
 ```
+
+# Cohort-specific coefficients, RETRASCORE points, odds ratios and confidence intervals
+
+The following two models use the same 13 RETRASCORE predictors but are fitted
+separately in the historical derivation cohort and the temporal validation
+cohort. RETRASCORE points are calculated as in the original score
+(`round(2 x beta)`). The 95% confidence interval shown is the Wald interval for
+the odds ratio. Reference categories have beta 0, zero points and OR 1 by
+definition, so an independent confidence interval is not applicable. The
+validation-cohort refit is descriptive and does not replace the primary
+validation of the unchanged published equation reported above.
+
+```{r cohort-specific-coefficient-tables, echo=FALSE}
+cohort_model_formula <- mortalidad_30d ~
+  edad_categoria +
+  precoag +
+  iot_prehospitalaria +
+  mecanismo_alto_riesgo +
+  pupilas +
+  gcs_menor_igual_8 +
+  mais_cabeza +
+  mais_torax +
+  fallo_hemodinamico +
+  fallo_respiratorio +
+  coagulopatia_24h +
+  ventilacion_mecanica +
+  hemorragia_masiva
+
+coefficient_labels <- c(
+  "edad_categoria<50" = "Age <50 (reference)",
+  "edad_categoria50-65" = "Age 50-65",
+  "edad_categoria66-75" = "Age 66-75",
+  "edad_categoria>75" = "Age >75",
+  "precoag" = "PRECOAG",
+  "iot_prehospitalaria" = "Pre-hospital intubation",
+  "mecanismo_alto_riesgo" = "High-risk mechanism",
+  "pupilasnormal" = "Normal pupils (reference)",
+  "pupilasmidriasis unilateral" = "Unilateral mydriasis",
+  "pupilasmidriasis bilateral" = "Bilateral mydriasis",
+  "gcs_menor_igual_8" = "GCS <=8",
+  "mais_cabeza" = "MAIS head",
+  "mais_torax" = "MAIS thorax",
+  "fallo_hemodinamico" = "Haemodynamic failure",
+  "fallo_respiratorio" = "Respiratory failure",
+  "coagulopatia_24h" = "Coagulopathy at 24 h",
+  "ventilacion_mecanica" = "Mechanical ventilation",
+  "hemorragia_masiva" = "Massive haemorrhage"
+)
+
+fit_cohort_coefficient_table <- function(data, cohort_name) {
+  model_data <- data %>%
+    select(mortalidad_30d, all_of(model_variables)) %>%
+    filter(complete.cases(.)) %>%
+    mutate(
+      edad_categoria = factor(
+        as.character(edad_categoria), levels = valid_age_levels
+      ),
+      pupilas = factor(as.character(pupilas), levels = valid_pupil_levels)
+    )
+
+  if (nrow(model_data) == 0L || length(unique(model_data$mortalidad_30d)) != 2L) {
+    stop("The ", cohort_name,
+         " cohort does not contain enough complete data to fit the model.")
+  }
+
+  fitted_model <- glm(
+    cohort_model_formula,
+    data = model_data,
+    family = binomial(link = "logit")
+  )
+  if (!fitted_model$converged || anyNA(coef(fitted_model))) {
+    stop("The cohort-specific model could not be estimated for ", cohort_name,
+         ".")
+  }
+
+  coefficient_matrix <- summary(fitted_model)$coefficients
+  coefficient_matrix <- coefficient_matrix[
+    rownames(coefficient_matrix) != "(Intercept)", , drop = FALSE
+  ]
+  result <- data.frame(
+    term = rownames(coefficient_matrix),
+    Beta = coefficient_matrix[, "Estimate"],
+    `RETRASCORE points` = as.integer(round(
+      2 * coefficient_matrix[, "Estimate"]
+    )),
+    OR = exp(coefficient_matrix[, "Estimate"]),
+    CI_lower = exp(
+      coefficient_matrix[, "Estimate"] -
+        1.96 * coefficient_matrix[, "Std. Error"]
+    ),
+    CI_upper = exp(
+      coefficient_matrix[, "Estimate"] +
+        1.96 * coefficient_matrix[, "Std. Error"]
+    ),
+    stringsAsFactors = FALSE,
+    check.names = FALSE
+  )
+
+  reference_rows <- data.frame(
+    term = c("edad_categoria<50", "pupilasnormal"),
+    Beta = 0,
+    `RETRASCORE points` = 0L,
+    OR = 1,
+    CI_lower = NA_real_,
+    CI_upper = NA_real_,
+    stringsAsFactors = FALSE,
+    check.names = FALSE
+  )
+  result <- rbind(result, reference_rows)
+  result <- result[match(names(coefficient_labels), result$term), , drop = FALSE]
+  result$Variable <- unname(coefficient_labels[result$term])
+  result$`OR (95% CI)` <- ifelse(
+    is.na(result$CI_lower),
+    "Reference",
+    sprintf("%.3f (%.3f-%.3f)", result$OR, result$CI_lower, result$CI_upper)
+  )
+  result <- result[, c(
+    "Variable", "Beta", "RETRASCORE points", "OR", "OR (95% CI)"
+  )]
+
+  list(model = fitted_model, n = nrow(model_data), table = result)
+}
+
+derivation_fit <- fit_cohort_coefficient_table(
+  analysis_cohort %>% filter(period == period_labels[1]),
+  period_labels[1]
+)
+validation_fit <- fit_cohort_coefficient_table(
+  analysis_cohort %>% filter(period == period_labels[2]),
+  period_labels[2]
+)
+
+write.csv(
+  derivation_fit$table,
+  file.path(output_dir, "retrascore_coefficients_derivation.csv"),
+  row.names = FALSE,
+  na = ""
+)
+write.csv(
+  validation_fit$table,
+  file.path(output_dir, "retrascore_coefficients_validation.csv"),
+  row.names = FALSE,
+  na = ""
+)
+
+knitr::kable(
+  derivation_fit$table,
+  digits = c(NA, 3, 0, 3, NA),
+  caption = paste0(
+    "Cohort-specific RETRASCORE model: derivation ", period_labels[1],
+    " (complete cases N=", derivation_fit$n, ")"
+  )
+)
+
+knitr::kable(
+  validation_fit$table,
+  digits = c(NA, 3, 0, 3, NA),
+  caption = paste0(
+    "Cohort-specific RETRASCORE model: validation ", period_labels[2],
+    " (complete cases N=", validation_fit$n, ")"
+  )
+)
+```

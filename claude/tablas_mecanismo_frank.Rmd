@@ -1,0 +1,210 @@
+---
+title: "Mortalidad en UCI por mecanismo e intencionalidad y pérdidas por NA"
+subtitle: "FRANK-TODO.sav, pacientes 2020-2025"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    number_sections: true
+---
+
+```{r configuracion, include=FALSE}
+knitr::opts_chunk$set(
+  echo = TRUE,
+  message = FALSE,
+  warning = TRUE,
+  fig.align = "center"
+)
+options(scipen = 999)
+library(haven)
+```
+
+# Lectura de datos
+
+El archivo está en la carpeta superior (`RETRASCORE_VALIDATION`).
+
+```{r lectura}
+df <- read_sav(file.path("..", "FRANK-TODO.sav"))
+
+# La columna 8 es el año (AÑOS). Se renombra para evitar problemas de
+# codificación de la Ñ en Windows.
+names(df)[8] <- "anio"
+
+# Se quitan las etiquetas de SPSS y se trabaja con los códigos numéricos.
+df[] <- lapply(df, function(x) if (inherits(x, "haven_labelled")) as.numeric(x) else x)
+
+cat("Filas:", nrow(df), "\nColumnas:", ncol(df), "\n")
+```
+
+# Selección de pacientes 2020-2025 y mayores de 17 años
+
+Se conservan los pacientes con año (`AÑOS`) entre 2020 y 2025, ambos incluidos, y se eliminan los menores de 18 años. Los pacientes con edad ausente no se eliminan aquí: se contabilizan como pérdida por NA más adelante.
+
+```{r filtro}
+n_inicial <- nrow(df)
+df <- df[!is.na(df$anio) & df$anio >= 2020 & df$anio <= 2025, ]
+n_2020_2025 <- nrow(df)
+
+df <- df[is.na(df$EDAD) | df$EDAD >= 18, ]
+
+cat("Pacientes iniciales:", n_inicial,
+    "\nPacientes 2020-2025:", n_2020_2025,
+    "\nMenores de 18 años eliminados:", n_2020_2025 - nrow(df),
+    "\nPacientes tras el filtro:", nrow(df), "\n")
+```
+
+# Definición de mortalidad
+
+En este archivo `EVOUCI` está etiquetada como 1 = planta, 2 = centro de referencia, 3 = exitus, 4 = reingreso y 5 = domicilio. Sin embargo, en los pacientes de 2020-2025 solo aparecen los códigos 1 y 2, y el código 2 corresponde a **exitus** (1.001 de los 1.018 pacientes con ese código figuran como fallecidos en `MUERTO`). Por eso, en este periodo, `EVOUCI == 2` se toma como fallecido y `EVOUCI == 1` como superviviente. Los pacientes con `EVOUCI` vacío se excluyen del cálculo.
+
+```{r definicion-mortalidad}
+print(table(df$EVOUCI, useNA = "ifany"))
+
+df$muerte <- ifelse(df$EVOUCI == 2, 1L,
+                    ifelse(df$EVOUCI == 1, 0L, NA_integer_))
+```
+
+# Mortalidad por mecanismo
+
+```{r tabla-mecanismo}
+etiquetas_mecanismo <- c(
+  "0" = "desconocido", "1" = "coche", "2" = "moto", "3" = "otros vehiculos",
+  "4" = "bici", "5" = "atropello", "6" = "caida accidental",
+  "7" = "precipitacion", "8" = "arma blanca", "9" = "arma de fuego",
+  "10" = "asta de toro", "11" = "golpeo con objeto", "12" = "explosion",
+  "13" = "aplastamiento", "14" = "accidente por zambullida", "15" = "otros"
+)
+df$mecanismo_limpio <- unname(etiquetas_mecanismo[as.character(df$MECANISMO)])
+
+datos_tabla <- df[!is.na(df$muerte) & !is.na(df$mecanismo_limpio), ]
+
+n_mec      <- tapply(datos_tabla$muerte, datos_tabla$mecanismo_limpio, length)
+exitus_mec <- tapply(datos_tabla$muerte, datos_tabla$mecanismo_limpio, sum)
+
+tabla_mecanismo <- data.frame(
+  Mecanismo = names(n_mec),
+  N = as.integer(n_mec),
+  Exitus = as.integer(exitus_mec),
+  Mortalidad_pct = round(100 * as.numeric(exitus_mec) / as.numeric(n_mec), 1)
+)
+tabla_mecanismo <- tabla_mecanismo[order(-tabla_mecanismo$N), ]
+
+tabla_mecanismo <- rbind(
+  tabla_mecanismo,
+  data.frame(
+    Mecanismo = "TOTAL",
+    N = nrow(datos_tabla),
+    Exitus = sum(datos_tabla$muerte),
+    Mortalidad_pct = round(100 * mean(datos_tabla$muerte), 1)
+  )
+)
+rownames(tabla_mecanismo) <- NULL
+
+knitr::kable(
+  tabla_mecanismo,
+  col.names = c("Mecanismo", "n", "Exitus (n)", "Mortalidad (%)"),
+  align = c("l", "r", "r", "r")
+)
+```
+
+```{r exclusiones-mecanismo}
+cat("Excluidos por evolucion_uci vacío:", sum(is.na(df$muerte)), "\n")
+cat("Excluidos por mecanismo vacío:", sum(is.na(df$mecanismo_limpio) & !is.na(df$muerte)), "\n")
+```
+
+# Mortalidad por intencionalidad
+
+`INTENCION` se agrupa en tres categorías: **No intencionado** (códigos 1 a 5: tráfico, caída, laboral, deportivo y otras actividades), **Intencionado** (código 6, agresión) y **Autolisis** (código 7). Los pacientes con intencionalidad desconocida (código 8) o vacía se excluyen.
+
+```{r tabla-intencionalidad}
+df$intencionalidad_3 <- NA_character_
+df$intencionalidad_3[df$INTENCION %in% 1:5] <- "No intencionado"
+df$intencionalidad_3[df$INTENCION %in% 6]   <- "Intencionado"
+df$intencionalidad_3[df$INTENCION %in% 7]   <- "Autolisis"
+df$intencionalidad_3 <- factor(
+  df$intencionalidad_3,
+  levels = c("No intencionado", "Intencionado", "Autolisis")
+)
+
+datos_int <- df[!is.na(df$muerte) & !is.na(df$intencionalidad_3), ]
+
+n_int      <- tapply(datos_int$muerte, datos_int$intencionalidad_3, length)
+exitus_int <- tapply(datos_int$muerte, datos_int$intencionalidad_3, sum)
+
+tabla_intencionalidad <- data.frame(
+  Intencionalidad = names(n_int),
+  N = as.integer(n_int),
+  Exitus = as.integer(exitus_int),
+  Mortalidad_pct = round(100 * as.numeric(exitus_int) / as.numeric(n_int), 1)
+)
+
+tabla_intencionalidad <- rbind(
+  tabla_intencionalidad,
+  data.frame(
+    Intencionalidad = "TOTAL",
+    N = nrow(datos_int),
+    Exitus = sum(datos_int$muerte),
+    Mortalidad_pct = round(100 * mean(datos_int$muerte), 1)
+  )
+)
+rownames(tabla_intencionalidad) <- NULL
+
+knitr::kable(
+  tabla_intencionalidad,
+  col.names = c("Intencionalidad", "n", "Exitus (n)", "Mortalidad (%)"),
+  align = c("l", "r", "r", "r")
+)
+```
+
+```{r exclusiones-intencionalidad}
+cat("Excluidos por evolucion_uci vacío:", sum(is.na(df$muerte)), "\n")
+cat("Excluidos por intencionalidad desconocida/vacía:",
+    sum(is.na(df$intencionalidad_3) & !is.na(df$muerte)), "\n")
+```
+
+# Pérdida de pacientes por valores ausentes (NA)
+
+Se considera NA una celda vacía en SPSS. Se muestra la n inicial (pacientes 2020-2025), los menores de 18 años eliminados y la pérdida **secuencial** (pacientes que se van perdiendo al aplicar las variables en el orden de la tabla: un paciente con varios NA solo se cuenta una vez, en la primera variable donde falla).
+
+```{r tabla-na}
+variables_na <- c(
+  "Edad"                       = "EDAD",
+  "Evolución UCI"              = "EVOUCI",
+  "Mecanismo"                  = "MECANISMO",
+  "Pupilas al ingreso"         = "PUPILAS",
+  "ISS"                        = "ISS",
+  "Glasgow (GCS)"              = "GCS",
+  "Hemorragia masiva"          = "HEMOMASIVA",
+  "Intubación prehospitalaria" = "IOTPRE2",
+  "Atención prehospitalaria"   = "PREHOSP"
+)
+
+restante <- rep(TRUE, nrow(df))
+filas <- list(
+  data.frame(Criterio = "N inicial (2020-2025)", Perdidos = NA_integer_,
+             N_restante = n_2020_2025),
+  data.frame(Criterio = "Edad < 18 años", Perdidos = n_2020_2025 - nrow(df),
+             N_restante = nrow(df))
+)
+for (i in seq_along(variables_na)) {
+  na_i <- is.na(df[[variables_na[i]]])
+  perdidos_i <- sum(restante & na_i)
+  restante <- restante & !na_i
+  filas[[length(filas) + 1]] <- data.frame(
+    Criterio = names(variables_na)[i],
+    Perdidos = perdidos_i,
+    N_restante = sum(restante)
+  )
+}
+tabla_na <- do.call(rbind, filas)
+tabla_na$Pct_perdido <- round(100 * tabla_na$Perdidos / n_2020_2025, 1)
+
+knitr::kable(
+  tabla_na,
+  col.names = c("Criterio", "Perdidos (n)", "N restante", "% perdido sobre N inicial"),
+  align = c("l", "r", "r", "r")
+)
+```
+
+**Traslados a otra UCI/hospital.** En este archivo no se pueden identificar en 2020-2025: la única variable con esa categoría (`EVOUCI = 2`, "centro de referencia") corresponde en este periodo a exitus, y `EVOHOSP` no tiene el código de centro de referencia en estos años. Por eso no se incluye esa fila en la tabla.

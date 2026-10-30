@@ -1,0 +1,10 @@
+"codigo","region","pacientes_con_lesion","pacientes_con_AIS_3_o_mas","pacientes_con_gravedad_incompleta"
+1,"Craneo",10068,7704,0
+2,"Cara",4068,568,0
+3,"Cuello",371,151,0
+4,"Torax",9498,7303,0
+5,"Abdomen",4047,2475,0
+6,"Columna vertebral",5392,1998,0
+7,"Extremidades superiores",5028,530,1
+8,"Extremidades inferiores",5671,3434,0
+9,"Piel y partes blandas",901,158,0

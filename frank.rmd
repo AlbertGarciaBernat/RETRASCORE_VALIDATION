@@ -1,0 +1,250 @@
+---
+title: "FRANK: regresion logistica RETRASCORE"
+output:
+  html_document:
+    toc: true
+    number_sections: true
+date: "`r format(Sys.Date(), '%Y-%m-%d')`"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo = TRUE,
+  warning = FALSE,
+  message = FALSE
+)
+
+required_packages <- c("haven", "dplyr", "knitr")
+missing_packages <- required_packages[
+  !vapply(required_packages, requireNamespace, logical(1), quietly = TRUE)
+]
+if (length(missing_packages)) {
+  stop(
+    "Instale los siguientes paquetes antes de generar el informe: ",
+    paste(missing_packages, collapse = ", ")
+  )
+}
+
+library(haven)
+library(dplyr)
+```
+
+# Cohorte y variables del estudio
+
+Se incluyen todos los pacientes registrados entre 2015 y 2019, sin excluir por
+edad, GCS ni datos ausentes en los predictores. Se conservan el identificador,
+el ano, la mortalidad a 30 dias y los 13 predictores del RETRASCORE. Los
+pacientes sin mortalidad a 30 dias observada permanecen en `frank_estudio`,
+pero no pueden contribuir a la estimacion de una regresion logistica.
+
+```{r cargar-y-seleccionar}
+source_file <- "FRANK-TODO.sav"
+if (!file.exists(source_file)) {
+  stop("No se encontro FRANK-TODO.sav en el directorio de trabajo.")
+}
+
+frank_original <- read_sav(source_file)
+
+# En este archivo la octava columna es el ano del trauma. Se renombra para
+# evitar diferencias de codificacion del caracter ENE con tilde en Windows.
+if (ncol(frank_original) < 8L) {
+  stop("El archivo no contiene la columna esperada para el ano del trauma.")
+}
+names(frank_original)[8] <- "anio_trauma"
+
+variables_fuente <- c(
+  "ID", "REGISTRO", "anio_trauma", "MORT30D",
+  "RAGE", "RDESCOAG", "RIOTPRE", "RCLASE", "RPUPILES",
+  "RGLASGOW8", "RSTBI", "RSTHORAX", "RHEMOD", "RIRESP",
+  "COAGULOPR", "RMV", "RHEMOMASIVA"
+)
+faltantes <- setdiff(variables_fuente, names(frank_original))
+if (length(faltantes)) {
+  stop("Faltan variables necesarias: ", paste(faltantes, collapse = ", "))
+}
+
+frank_elegible <- frank_original %>%
+  filter(
+    !is.na(anio_trauma),
+    anio_trauma >= 2015,
+    anio_trauma <= 2017
+  )
+
+frank_estudio <- frank_elegible %>%
+  transmute(
+    id = ID,
+    registro = REGISTRO,
+    anio_trauma = as.integer(anio_trauma),
+    mortalidad_30d = as.integer(MORT30D),
+    edad_categoria = factor(
+      as.numeric(RAGE),
+      levels = c(0, 1, 2, 4),
+      labels = c("<50", "50-65", "66-75", ">75")
+    ),
+    precoag = as.integer(RDESCOAG),
+    iot_prehospitalaria = as.integer(RIOTPRE),
+    mecanismo_alto_riesgo = as.integer(RCLASE),
+    pupilas = factor(
+      as.numeric(RPUPILES),
+      levels = c(0, 2, 6),
+      labels = c(
+        "normal", "midriasis unilateral", "midriasis bilateral"
+      )
+    ),
+    gcs_menor_igual_8 = as.integer(as.numeric(RGLASGOW8) / 2),
+    mais_cabeza = as.integer(RSTBI),
+    mais_torax = as.integer(RSTHORAX),
+    fallo_hemodinamico = as.integer(as.numeric(RHEMOD) / 2),
+    fallo_respiratorio = as.integer(RIRESP),
+    coagulopatia_24h = as.integer(COAGULOPR),
+    ventilacion_mecanica = as.integer(RMV),
+    hemorragia_masiva = as.integer(RHEMOMASIVA)
+  )
+
+predictores <- c(
+  "edad_categoria", "precoag", "iot_prehospitalaria",
+  "mecanismo_alto_riesgo", "pupilas", "gcs_menor_igual_8",
+  "mais_cabeza", "mais_torax", "fallo_hemodinamico",
+  "fallo_respiratorio", "coagulopatia_24h",
+  "ventilacion_mecanica", "hemorragia_masiva"
+)
+variables_modelo <- c("mortalidad_30d", predictores)
+```
+
+# Controles de calidad
+
+```{r controles-calidad}
+variables_binarias <- setdiff(
+  variables_modelo,
+  c("edad_categoria", "pupilas")
+)
+
+valores_invalidos <- vapply(
+  frank_estudio[variables_binarias],
+  function(x) any(!is.na(x) & !x %in% c(0L, 1L)),
+  logical(1)
+)
+if (any(valores_invalidos)) {
+  stop(
+    "Hay valores distintos de 0, 1 o NA en: ",
+    paste(names(valores_invalidos)[valores_invalidos], collapse = ", ")
+  )
+}
+
+# No se elimina a ningun paciente por un predictor. En esta base, todos los
+# pacientes con desenlace conocido tienen los 13 predictores completos.
+outcome_conocido <- !is.na(frank_estudio$mortalidad_30d)
+predictores_ausentes_con_outcome <- !complete.cases(
+  frank_estudio[outcome_conocido, predictores, drop = FALSE]
+)
+if (any(predictores_ausentes_con_outcome)) {
+  stop(
+    "Hay pacientes con mortalidad conocida y predictores ausentes. ",
+    "El modelo no puede incluirlos sin definir una estrategia de imputacion."
+  )
+}
+frank_modelo <- frank_estudio[outcome_conocido, , drop = FALSE]
+
+if (!nrow(frank_modelo)) {
+  stop("No hay casos completos para ajustar la regresion.")
+}
+if (length(unique(frank_modelo$mortalidad_30d)) != 2L) {
+  stop("La mortalidad a 30 dias no contiene las dos categorias.")
+}
+
+flujo_analisis <- data.frame(
+  etapa = c(
+    "Filas en el archivo original",
+    "Todos los pacientes de 2015-2019 conservados",
+    "Con mortalidad a 30 dias conocida: incluidos en el modelo",
+    "Sin mortalidad a 30 dias: conservados, no estimables"
+  ),
+  n = c(
+    nrow(frank_original),
+    nrow(frank_estudio),
+    nrow(frank_modelo),
+    sum(!outcome_conocido)
+  )
+)
+
+resumen_modelo <- data.frame(
+  periodo = paste(range(frank_modelo$anio_trauma), collapse = "-"),
+  pacientes = nrow(frank_modelo),
+  muertes_30d = sum(frank_modelo$mortalidad_30d),
+  mortalidad_30d_pct = round(
+    100 * mean(frank_modelo$mortalidad_30d), 1
+  )
+)
+
+knitr::kable(flujo_analisis, caption = "Flujo de seleccion de la cohorte")
+knitr::kable(resumen_modelo, caption = "Muestra usada en la regresion")
+```
+
+# Regresion logistica
+
+```{r regresion-logistica}
+formula_modelo <- reformulate(
+  predictores,
+  response = "mortalidad_30d"
+)
+
+modelo_logistico <- glm(
+  formula_modelo,
+  data = frank_modelo,
+  family = binomial(link = "logit"),
+  na.action = na.fail
+)
+
+if (!isTRUE(modelo_logistico$converged)) {
+  stop("La regresion logistica no ha convergido.")
+}
+if (anyNA(coef(modelo_logistico))) {
+  stop("El modelo contiene coeficientes no estimables.")
+}
+
+coeficientes <- summary(modelo_logistico)$coefficients
+tabla_modelo <- data.frame(
+  termino = rownames(coeficientes),
+  beta = coeficientes[, "Estimate"],
+  error_estandar = coeficientes[, "Std. Error"],
+  OR = exp(coeficientes[, "Estimate"]),
+  IC95_inferior = exp(
+    coeficientes[, "Estimate"] - 1.96 * coeficientes[, "Std. Error"]
+  ),
+  IC95_superior = exp(
+    coeficientes[, "Estimate"] + 1.96 * coeficientes[, "Std. Error"]
+  ),
+  p = coeficientes[, "Pr(>|z|)"],
+  row.names = NULL,
+  check.names = FALSE
+)
+
+tabla_modelo[, c(
+  "beta", "error_estandar", "OR", "IC95_inferior", "IC95_superior"
+)] <- round(
+  tabla_modelo[, c(
+    "beta", "error_estandar", "OR", "IC95_inferior", "IC95_superior"
+  )],
+  3
+)
+tabla_modelo$p <- format.pval(tabla_modelo$p, digits = 3, eps = 0.001)
+
+ajuste_modelo <- data.frame(
+  medida = c("N", "Muertes a 30 dias", "AIC", "Convergencia"),
+  valor = c(
+    format(nobs(modelo_logistico), scientific = FALSE),
+    format(
+      sum(model.response(model.frame(modelo_logistico))),
+      scientific = FALSE
+    ),
+    format(round(AIC(modelo_logistico), 1), nsmall = 1),
+    ifelse(modelo_logistico$converged, "Si", "No")
+  )
+)
+
+knitr::kable(ajuste_modelo, caption = "Resumen del ajuste")
+knitr::kable(
+  tabla_modelo,
+  caption = "Regresion logistica multivariable de mortalidad a 30 dias"
+)
+```

@@ -1,0 +1,255 @@
+---
+title: "Mortalidad en UCI por mecanismo de trauma"
+subtitle: "Cohorte RETRASCORE"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    number_sections: true
+---
+
+```{r configuracion, include=FALSE}
+knitr::opts_chunk$set(
+  echo = TRUE,
+  message = FALSE,
+  warning = TRUE,
+  fig.align = "center"
+)
+options(scipen = 999)
+```
+
+# Lectura de datos
+
+El archivo está en la carpeta superior (`RETRASCORE_VALIDATION`) y usa `;` como separador, por lo que se lee con `read.csv2`.
+
+```{r lectura}
+ruta_csv <- file.path("..", "retrauci_abril_2026.csv")
+
+df <- read.csv2(
+  ruta_csv,
+  stringsAsFactors = TRUE
+)
+```
+
+# Selección de pacientes 2020-2025 y mayores de 17 años
+
+Se conservan los pacientes con fecha de ingreso en UCI (`fecha_ingreso_uci`, formato dd/mm/aaaa) entre 2020 y 2025, ambos incluidos, y se eliminan los menores de 18 años. Los pacientes con edad ausente no se eliminan aquí: se contabilizan como pérdida por NA más adelante.
+
+```{r filtro}
+n_inicial <- nrow(df)
+
+df$fecha_ingreso_uci <- as.Date(df$fecha_ingreso_uci, format = "%d/%m/%Y")
+df$anyo_ingreso_uci  <- as.integer(format(df$fecha_ingreso_uci, "%Y"))
+
+df <- df[!is.na(df$anyo_ingreso_uci) &
+           df$anyo_ingreso_uci >= 2020 &
+           df$anyo_ingreso_uci <= 2025, ]
+n_2020_2025 <- nrow(df)
+
+edad_num <- suppressWarnings(as.numeric(as.character(df$edad)))
+df <- df[is.na(edad_num) | edad_num >= 18, ]
+
+cat("Pacientes iniciales:", n_inicial,
+    "\nPacientes 2020-2025:", n_2020_2025,
+    "\nMenores de 18 años eliminados:", n_2020_2025 - nrow(df),
+    "\nPacientes tras el filtro:", nrow(df), "\n")
+```
+
+# Mortalidad por mecanismo
+
+La mortalidad se define a partir de `evolucion_uci`: `exitus` y `exitus y donacion` cuentan como fallecidos y `alta` como superviviente. Los pacientes con `evolucion_uci` vacío se excluyen del cálculo.
+
+```{r tabla-mecanismo}
+limpiar_texto <- function(x) trimws(tolower(as.character(x)))
+
+evol <- limpiar_texto(df$evolucion_uci)
+df$muerte <- ifelse(evol %in% c("exitus", "exitus y donacion"), 1L,
+                    ifelse(evol == "alta", 0L, NA_integer_))
+df$mecanismo_limpio <- limpiar_texto(df$mecanismo)
+df$mecanismo_limpio[df$mecanismo_limpio == ""] <- NA
+
+datos_tabla <- df[!is.na(df$muerte) & !is.na(df$mecanismo_limpio), ]
+
+n_mec      <- tapply(datos_tabla$muerte, datos_tabla$mecanismo_limpio, length)
+exitus_mec <- tapply(datos_tabla$muerte, datos_tabla$mecanismo_limpio, sum)
+
+tabla_mecanismo <- data.frame(
+  Mecanismo = names(n_mec),
+  N = as.integer(n_mec),
+  Exitus = as.integer(exitus_mec),
+  Mortalidad_pct = round(100 * as.numeric(exitus_mec) / as.numeric(n_mec), 1)
+)
+tabla_mecanismo <- tabla_mecanismo[order(-tabla_mecanismo$N), ]
+
+fila_total <- data.frame(
+  Mecanismo = "TOTAL",
+  N = nrow(datos_tabla),
+  Exitus = sum(datos_tabla$muerte),
+  Mortalidad_pct = round(100 * mean(datos_tabla$muerte), 1)
+)
+tabla_mecanismo <- rbind(tabla_mecanismo, fila_total)
+rownames(tabla_mecanismo) <- NULL
+
+knitr::kable(
+  tabla_mecanismo,
+  col.names = c("Mecanismo", "n", "Exitus (n)", "Mortalidad (%)"),
+  align = c("l", "r", "r", "r")
+)
+```
+
+```{r exclusiones}
+cat("Excluidos por evolucion_uci vacío:", sum(is.na(df$muerte)), "\n")
+cat("Excluidos por mecanismo vacío:", sum(is.na(df$mecanismo_limpio) & !is.na(df$muerte)), "\n")
+```
+
+# Mortalidad por intencionalidad
+
+La variable `intencionalidad` se agrupa en tres categorías: **No intencionado** (todas las subcategorías de `no intencional`: tráfico, caída, laboral, deportivo y otras actividades), **Intencionado** (`intencionado : agresion`) y **Autolisis** (`intencionado : autolisis`). Los pacientes con intencionalidad `desconocido` o vacía se excluyen.
+
+```{r tabla-intencionalidad}
+int_txt <- limpiar_texto(df$intencionalidad)
+
+df$intencionalidad_3 <- NA_character_
+df$intencionalidad_3[grepl("^no intencional", int_txt)]          <- "No intencionado"
+df$intencionalidad_3[int_txt == "intencionado : agresion"]       <- "Intencionado"
+df$intencionalidad_3[int_txt == "intencionado : autolisis"]      <- "Autolisis"
+df$intencionalidad_3 <- factor(
+  df$intencionalidad_3,
+  levels = c("No intencionado", "Intencionado", "Autolisis")
+)
+
+datos_int <- df[!is.na(df$muerte) & !is.na(df$intencionalidad_3), ]
+
+n_int      <- tapply(datos_int$muerte, datos_int$intencionalidad_3, length)
+exitus_int <- tapply(datos_int$muerte, datos_int$intencionalidad_3, sum)
+
+tabla_intencionalidad <- data.frame(
+  Intencionalidad = names(n_int),
+  N = as.integer(n_int),
+  Exitus = as.integer(exitus_int),
+  Mortalidad_pct = round(100 * as.numeric(exitus_int) / as.numeric(n_int), 1)
+)
+
+tabla_intencionalidad <- rbind(
+  tabla_intencionalidad,
+  data.frame(
+    Intencionalidad = "TOTAL",
+    N = nrow(datos_int),
+    Exitus = sum(datos_int$muerte),
+    Mortalidad_pct = round(100 * mean(datos_int$muerte), 1)
+  )
+)
+rownames(tabla_intencionalidad) <- NULL
+
+knitr::kable(
+  tabla_intencionalidad,
+  col.names = c("Intencionalidad", "n", "Exitus (n)", "Mortalidad (%)"),
+  align = c("l", "r", "r", "r")
+)
+```
+
+```{r exclusiones-intencionalidad}
+cat("Excluidos por evolucion_uci vacío:", sum(is.na(df$muerte)), "\n")
+cat("Excluidos por intencionalidad desconocida/vacía:",
+    sum(is.na(df$intencionalidad_3) & !is.na(df$muerte)), "\n")
+```
+
+# Pérdida de pacientes por valores ausentes (NA)
+
+Se considera NA una celda vacía o con el texto `NA`/`NAS`. Se muestra la n inicial (pacientes 2020-2025), los menores de 18 años eliminados y la pérdida **secuencial** (pacientes que se van perdiendo al ir aplicando las variables en el orden de la tabla, de modo que un paciente con varios NA solo se cuenta una vez, en la primera variable donde falla). Los traslados a otra UCI/hospital no son NA sino un criterio de exclusión, y se aplican al final.
+
+```{r tabla-na}
+es_na <- function(x) {
+  x <- trimws(as.character(x))
+  is.na(x) | x == "" | toupper(x) %in% c("NA", "NAS")
+}
+
+variables_na <- c(
+  "Edad"                       = "edad",
+  "Evolución UCI"              = "evolucion_uci",
+  "Mecanismo"                  = "mecanismo",
+  "Pupilas al ingreso"         = "pupilas_ingreso",
+  "ISS"                        = "iss",
+  "Glasgow (GCS total)"        = "gcs_total_introducido",
+  "Hemorragia masiva"          = "hemorragia_masiva",
+  "Intubación prehospitalaria" = "iot_prehospitalaria",
+  "Atención prehospitalaria"   = "atencion_prehospitalaria"
+)
+
+# Traslado a otra UCI / hospital antes de la recuperación (destino al alta de UCI)
+destinos_traslado <- c("traslado a otra uci", "hospital de origen",
+                       "hospital de referencia trauma")
+
+perdidas_na <- function(datos, n_ini, n_menores) {
+  restante <- rep(TRUE, nrow(datos))
+  filas <- list(
+    data.frame(Criterio = "N inicial (2020-2025)", NA_individual = NA_integer_,
+               Perdidos = NA_integer_, N_restante = n_ini),
+    data.frame(Criterio = "Edad < 18 años", NA_individual = NA_integer_,
+               Perdidos = n_menores, N_restante = n_ini - n_menores)
+  )
+  for (i in seq_along(variables_na)) {
+    na_i <- es_na(datos[[variables_na[i]]])
+    perdidos_i <- sum(restante & na_i)
+    restante <- restante & !na_i
+    filas[[length(filas) + 1]] <- data.frame(
+      Criterio = names(variables_na)[i],
+      NA_individual = sum(na_i),
+      Perdidos = perdidos_i,
+      N_restante = sum(restante)
+    )
+  }
+  traslado <- limpiar_texto(datos$destino_alta_uci) %in% destinos_traslado
+  perdidos_tr <- sum(restante & traslado)
+  restante <- restante & !traslado
+  filas[[length(filas) + 1]] <- data.frame(
+    Criterio = "Traslado a otra UCI/hospital",
+    NA_individual = sum(traslado),
+    Perdidos = perdidos_tr,
+    N_restante = sum(restante)
+  )
+  tabla <- do.call(rbind, filas)
+  tabla$Pct_perdido <- round(100 * tabla$Perdidos / n_ini, 1)
+  tabla
+}
+
+nombres_col <- c("Criterio", "Perdidos (n)", "N restante", "% perdido sobre N inicial")
+```
+
+## Tabla (pacientes 2020-2025)
+
+```{r tabla-na-2020-2025}
+tabla_na <- perdidas_na(df, n_ini = n_2020_2025,
+                        n_menores = n_2020_2025 - nrow(df))
+tabla_na$NA_individual <- NULL   # se deja solo la columna de pérdidas secuenciales
+
+knitr::kable(tabla_na, col.names = nombres_col,
+             align = c("l", "r", "r", "r"))
+```
+
+## Detalle de los pacientes perdidos por traslado
+
+Pacientes que llegan a este paso (sin NA en ninguna de las variables anteriores) y se pierden por traslado, desglosados por destino. Se comprueba además su `evolucion_uci` y su `evolucion_hospitalaria` para ver si se conoce el desenlace final.
+
+```{r detalle-traslados}
+sin_na <- Reduce(`&`, lapply(variables_na, function(v) !es_na(df[[v]])))
+traslados <- df[sin_na & limpiar_texto(df$destino_alta_uci) %in% destinos_traslado, ]
+
+traslados$destino <- limpiar_texto(traslados$destino_alta_uci)
+traslados$evol_hosp <- ifelse(es_na(traslados$evolucion_hospitalaria),
+                              "sin dato", limpiar_texto(traslados$evolucion_hospitalaria))
+
+tabla_traslados <- as.data.frame(
+  table(Destino = traslados$destino,
+        `Evolución UCI` = limpiar_texto(traslados$evolucion_uci),
+        `Evolución hospitalaria` = traslados$evol_hosp),
+  responseName = "n"
+)
+tabla_traslados <- tabla_traslados[tabla_traslados$n > 0, ]
+tabla_traslados <- tabla_traslados[order(-tabla_traslados$n), ]
+rownames(tabla_traslados) <- NULL
+
+knitr::kable(tabla_traslados, align = c("l", "l", "l", "r"))
+cat("\nTotal perdidos por traslado:", nrow(traslados), "\n")
+```
