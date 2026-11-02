@@ -437,7 +437,8 @@ gcs_le_8 <- ifelse(
 # Anatomical variables -----------------------------------------------------
 # RETRAUCI regional MAIS variables are used directly:
 # mais1 head, mais2 upper extremity, mais3 thorax, mais4 abdomen,
-# mais5 lower extremity, and mais6 external/thermal injuries.
+# mais5 lower extremity (including pelvis; see the pelvis split below), and
+# mais6 external/thermal injuries.
 # In this export, 0, an empty MAIS cell, NA, na, and NAS all mean that no injury
 # is present in that region and are coded as 0. Other non-numeric values or
 # values outside the AIS 0-6 range are retained as missing.
@@ -460,8 +461,68 @@ head_ais <- convert_regional_mais(raw_data$mais1)
 upper_extremity_ais <- convert_regional_mais(raw_data$mais2)
 thorax_ais <- convert_regional_mais(raw_data$mais3)
 abdomen_ais <- convert_regional_mais(raw_data$mais4)
-lower_extremity_ais <- convert_regional_mais(raw_data$mais5)
+lower_extremity_incl_pelvis_ais <- convert_regional_mais(raw_data$mais5)
 external_ais <- convert_regional_mais(raw_data$mais6)
+
+# Pelvis and lower extremity are analysed separately. In the AIS 2005 coding
+# used by the registry, region 8 (lower extremity) includes the pelvis. Pelvic
+# lesions are those whose AIS code (lesion_X_ais) starts with 8561 (pelvic ring)
+# or 8562 (acetabulum). The text in lesion_X_nombre is a generic menu label and
+# is NOT used to identify the pelvis.
+# - pelvis_ais: maximum AIS severity among pelvic lesions (0 if none).
+# - lower_extremity_ais: maximum AIS severity among the remaining region-8
+#   lesions (pelvis excluded).
+# Patients with no region-8 lesion detail in lesion_X_* cannot be split, so for
+# them the total lower-extremity MAIS (mais5) is kept as lower extremity and
+# pelvis_ais is 0. Their number is reported in the summary table below.
+lesion_indices <- 0:31
+lesion_region_columns <- paste0("lesion_", lesion_indices, "_region_ais")
+lesion_severity_columns <- paste0("lesion_", lesion_indices, "_gravedad")
+lesion_code_columns <- paste0("lesion_", lesion_indices, "_ais")
+
+missing_lesion_columns <- setdiff(
+  c(lesion_region_columns, lesion_severity_columns, lesion_code_columns),
+  names(raw_data)
+)
+if (length(missing_lesion_columns) > 0L) {
+  stop(
+    "Missing lesion columns: ",
+    paste(missing_lesion_columns, collapse = ", ")
+  )
+}
+
+lesion_region <- sapply(raw_data[lesion_region_columns], clean_number)
+lesion_severity <- sapply(raw_data[lesion_severity_columns], clean_number)
+lesion_code_prefix <- sapply(
+  raw_data[lesion_code_columns],
+  function(x) substr(trimws(as.character(x)), 1, 4)
+)
+lesion_severity[!(lesion_severity %in% 1:6)] <- NA_real_
+
+is_lower_limb_lesion <- lesion_region == 8
+is_lower_limb_lesion[is.na(is_lower_limb_lesion)] <- FALSE
+is_pelvic_lesion <- is_lower_limb_lesion &
+  matrix(
+    lesion_code_prefix %in% c("8561", "8562"),
+    nrow = nrow(lesion_code_prefix)
+  )
+is_nonpelvic_lower_limb_lesion <- is_lower_limb_lesion & !is_pelvic_lesion
+
+max_lesion_severity <- function(selected_lesions) {
+  severity <- ifelse(selected_lesions, lesion_severity, 0)
+  result <- apply(severity, 1, max, na.rm = TRUE)
+  # A selected lesion without a valid severity leaves the maximum unknown.
+  result[rowSums(selected_lesions & is.na(lesion_severity)) > 0] <- NA_real_
+  result
+}
+
+has_lower_limb_detail <- rowSums(is_lower_limb_lesion) > 0
+pelvis_ais <- max_lesion_severity(is_pelvic_lesion)
+lower_extremity_ais <- ifelse(
+  has_lower_limb_detail,
+  max_lesion_severity(is_nonpelvic_lower_limb_lesion),
+  lower_extremity_incl_pelvis_ais
+)
 
 # Organ failures within the first 24 hours --------------------------------
 
@@ -538,8 +599,11 @@ retrascore_cohort <- data.frame(
   abdomen_mais = dichotomize_mais(abdomen_ais),
   upper_extremity_ais = upper_extremity_ais,
   upper_extremity_mais = dichotomize_mais(upper_extremity_ais),
+  lower_extremity_incl_pelvis_ais = lower_extremity_incl_pelvis_ais,
   lower_extremity_ais = lower_extremity_ais,
   lower_extremity_mais = dichotomize_mais(lower_extremity_ais),
+  pelvis_ais = pelvis_ais,
+  pelvis_mais = dichotomize_mais(pelvis_ais),
   external_ais = external_ais,
   external_mais = dichotomize_mais(external_ais),
   hemodynamic_failure = hemodynamic_failure,
@@ -613,17 +677,51 @@ cohort_missingness_summary <- cohort_missingness_summary[
 cohort_missingness_summary
 ```
 
+## Pelvis and lower extremity
+
+Pelvis (AIS codes 8561xx and 8562xx) and the rest of the lower extremity are
+coded separately; `lower_extremity_mais` no longer includes the pelvis. The
+table shows, for the final cohort, how many patients have a severe injury
+(AIS >= 3) in each group and how many patients lack lesion-level detail in
+region 8, for whom the pelvic and non-pelvic components cannot be separated.
+
+```{r pelvis-lower-extremity-summary, echo=FALSE}
+pelvis_split_summary <- data.frame(
+  Measure = c(
+    "Patients in the cohort",
+    "Total lower extremity incl. pelvis, MAIS >= 3 (mais5)",
+    "Pelvis (8561/8562), MAIS >= 3",
+    "Lower extremity excluding pelvis, MAIS >= 3",
+    "MAIS >= 3 in mais5 but no region-8 lesion detail (not splittable)"
+  ),
+  n = c(
+    nrow(retrascore_cohort),
+    sum(retrascore_cohort$lower_extremity_incl_pelvis_ais >= 3, na.rm = TRUE),
+    sum(retrascore_cohort$pelvis_mais == 1, na.rm = TRUE),
+    sum(retrascore_cohort$lower_extremity_mais == 1, na.rm = TRUE),
+    sum(
+      retrascore_cohort$lower_extremity_incl_pelvis_ais >= 3 &
+        !has_lower_limb_detail[retrascore_cohort$row_id],
+      na.rm = TRUE
+    )
+  )
+)
+knitr::kable(pelvis_split_summary, align = c("l", "r"))
+```
+
 # Preprocessed cohort
 
 The preprocessed data remain available in memory as the `retrascore_cohort`
 object. This document does not write an RDS file or any other data file.
 
-# Logistic regression with an 80/20 split
+# Logistic regression with a temporal split
 
 The model uses the same 13 predictors included in the final logistic regression
-from the previous study. Complete cases are split into training (80%) and test
-(20%) sets. The split is stratified by 30-day mortality and uses a fixed seed
-for reproducibility. The model is fitted only in the training set.
+from the previous study. Complete cases are split temporally by year of trauma:
+patients injured in 2020-2023 form the training set and patients injured in
+2024-2025 form the validation set. The model is fitted only in the training
+set. Patients injured outside 2020-2025 (or without a valid trauma date) are
+not used.
 
 ```{r logistic-regression}
 # Variables retained in the previous study.
@@ -645,7 +743,7 @@ selected_predictors <- c(
 
 outcome_variable <- "mortality_30d"
 required_variables <- c(outcome_variable, selected_predictors)
-model_variables <- c("row_id", required_variables)
+model_variables <- c("row_id", "trauma_year", required_variables)
 missing_variables <- setdiff(required_variables, names(retrascore_cohort))
 
 if (length(missing_variables) > 0L) {
@@ -670,19 +768,29 @@ if (!identical(sort(unique(model_data[[outcome_variable]])), c(0L, 1L))) {
   stop("The model outcome must contain both 0 and 1.")
 }
 
-# Create a reproducible outcome-stratified 80/20 split.
-set.seed(20261027)
-row_indices_by_outcome <- split(
-  seq_len(nrow(model_data)),
-  model_data[[outcome_variable]]
-)
+# Temporal split by year of trauma: train 2020-2023, validate 2024-2025.
+training_years <- 2020:2023
+validation_years <- 2024:2025
 
-training_indices <- sort(unlist(lapply(row_indices_by_outcome, function(indices) {
-  sample(indices, size = round(0.80 * length(indices)), replace = FALSE)
-})))
+training_data <- model_data[
+  model_data$trauma_year %in% training_years,
+  ,
+  drop = FALSE
+]
+test_data <- model_data[
+  model_data$trauma_year %in% validation_years,
+  ,
+  drop = FALSE
+]
 
-training_data <- model_data[training_indices, , drop = FALSE]
-test_data <- model_data[-training_indices, , drop = FALSE]
+if (nrow(training_data) == 0L || nrow(test_data) == 0L) {
+  stop("The training or validation period contains no complete cases.")
+}
+for (split_data in list(training_data, test_data)) {
+  if (!identical(sort(unique(split_data[[outcome_variable]])), c(0L, 1L))) {
+    stop("Each temporal sample must contain both outcome classes.")
+  }
+}
 
 model_formula <- reformulate(
   termlabels = selected_predictors,
@@ -708,7 +816,12 @@ if (anyNA(coef(logistic_model))) {
 
 ```{r split-summary-table, echo=FALSE}
 split_summary_table <- data.frame(
-  Sample = c("Full preprocessed cohort", "Complete cases", "Training", "Test"),
+  Sample = c(
+    "Full preprocessed cohort",
+    "Complete cases (all years)",
+    "Training (2020-2023)",
+    "Validation (2024-2025)"
+  ),
   N = c(
     nrow(retrascore_cohort),
     nrow(model_data),
@@ -733,7 +846,7 @@ split_summary_table <- data.frame(
 knitr::kable(
   split_summary_table,
   align = c("l", "r", "r", "r"),
-  caption = "Cohort and 80/20 split summary"
+  caption = "Cohort and temporal split summary"
 )
 ```
 
@@ -780,7 +893,7 @@ model_results_table$`P value` <- format.pval(
 knitr::kable(
   model_results_table,
   align = c("l", rep("r", 6)),
-  caption = "Multivariable logistic regression in the 80% training set"
+  caption = "Multivariable logistic regression in the 2020-2023 training set"
 )
 ```
 
@@ -824,8 +937,8 @@ evaluate_model <- function(data, sample_name) {
 }
 
 model_performance_table <- rbind(
-  evaluate_model(training_data, "Training (80%)"),
-  evaluate_model(test_data, "Test (20%)")
+  evaluate_model(training_data, "Training (2020-2023)"),
+  evaluate_model(test_data, "Validation (2024-2025)")
 )
 
 performance_columns <- c("Observed mortality (%)", "AUC", "Brier score")
@@ -838,22 +951,22 @@ model_performance_table[performance_columns] <- lapply(
 knitr::kable(
   model_performance_table,
   align = c("l", "r", "r", "r", "r", "r"),
-  caption = "Model performance in the training and test sets"
+  caption = "Model performance in the training (2020-2023) and validation (2024-2025) sets"
 )
 ```
 
 # Data-driven variable selection
 
 The following analyses do not use the predictors retained by the previous
-study as prior information. Both methods start from the same set of 20 eligible
+study as prior information. Both methods start from the same set of 21 eligible
 clinical candidate predictors. Identifiers, year, other outcomes, variables
 measured after the outcome, and the TRISS prediction are excluded.
 
-Variable selection is performed exclusively in the same stratified 80%
-training sample defined for the first logistic regression. Patients with
-complete data for all 20 candidates retain their original training or test
-assignment through `row_id`. The 20% test sample is not used for variable
-selection or model estimation.
+Variable selection is performed exclusively in the 2020-2023 training period
+defined for the first logistic regression. Patients with complete data for all
+21 candidates are assigned to the training (2020-2023) or validation
+(2024-2025) period by year of trauma. The 2024-2025 validation sample is not
+used for variable selection or model estimation.
 
 ```{r variable-selection-data}
 required_selection_packages <- c("glmnet", "MASS", "pROC")
@@ -890,6 +1003,7 @@ candidate_predictors <- c(
   "abdomen_mais",
   "upper_extremity_mais",
   "lower_extremity_mais",
+  "pelvis_mais",
   "external_mais",
   "hemodynamic_failure",
   "respiratory_failure",
@@ -898,7 +1012,9 @@ candidate_predictors <- c(
   "massive_hemorrhage"
 )
 
-selection_variables <- c("row_id", outcome_variable, candidate_predictors)
+selection_variables <- c(
+  "row_id", "trauma_year", outcome_variable, candidate_predictors
+)
 missing_candidate_variables <- setdiff(
   selection_variables,
   names(retrascore_cohort)
@@ -926,23 +1042,20 @@ if (nrow(selection_data) == 0L) {
   stop("No complete cases are available for variable selection.")
 }
 
-# Preserve the exact patient assignment from the first 80/20 split.
+# Assign patients to the temporal training and validation periods.
 selection_training_data <- selection_data[
-  selection_data$row_id %in% training_data$row_id,
+  selection_data$trauma_year %in% training_years,
   ,
   drop = FALSE
 ]
 selection_test_data <- selection_data[
-  selection_data$row_id %in% test_data$row_id,
+  selection_data$trauma_year %in% validation_years,
   ,
   drop = FALSE
 ]
 
-if (
-  nrow(selection_training_data) + nrow(selection_test_data) !=
-    nrow(selection_data)
-) {
-  stop("Some selection patients were not found in the original 80/20 split.")
+if (nrow(selection_training_data) == 0L || nrow(selection_test_data) == 0L) {
+  stop("The training or validation period contains no selection cases.")
 }
 
 selection_formula <- reformulate(
@@ -1012,7 +1125,7 @@ lasso_selected_predictors <- names(lasso_term_strength)[
 
 ## Stepwise selection
 
-Bidirectional stepwise selection starts from the full 20-predictor logistic
+Bidirectional stepwise selection starts from the full 21-predictor logistic
 model and minimizes Akaike's information criterion (AIC). It uses the same
 training patients as LASSO.
 
@@ -1047,8 +1160,8 @@ stepwise_selected_predictors <- attr(
 ## Logistic models using the selected variables
 
 The selection methods determine the predictor sets only. Two standard,
-unpenalized multivariable logistic regressions are then fitted in the same 80%
-training sample: one using the variables selected by LASSO and one using those
+unpenalized multivariable logistic regressions are then fitted in the same
+2020-2023 training sample: one using the variables selected by LASSO and one using those
 selected by stepwise AIC.
 
 ```{r selected-logistic-models}
@@ -1176,7 +1289,7 @@ knitr::kable(
   align = c("l", rep("r", 6)),
   caption = paste(
     "Logistic regression fitted with the variables selected by LASSO",
-    "in the original 80% training split"
+    "in the 2020-2023 training period"
   )
 )
 ```
@@ -1191,7 +1304,7 @@ knitr::kable(
   align = c("l", rep("r", 6)),
   caption = paste(
     "Logistic regression fitted with the variables selected by stepwise AIC",
-    "in the original 80% training split"
+    "in the 2020-2023 training period"
   )
 )
 ```
@@ -1199,9 +1312,9 @@ knitr::kable(
 ## Training and test AUC of the refitted logistic models
 
 Predictions use the two unpenalized logistic models refitted after variable
-selection. Performance is reported both in the 80% training sample and in the
-untouched patients from the original 20% test split who have complete data for
-all candidate predictors. The test AUC therefore measures discrimination in
+selection. Performance is reported both in the 2020-2023 training sample and in
+the 2024-2025 validation sample (patients with complete data for all candidate
+predictors). The validation AUC therefore measures temporal discrimination in
 patients who were not used for variable selection or coefficient estimation.
 AUC 95% confidence intervals are calculated with DeLong's method.
 
@@ -1264,28 +1377,28 @@ evaluate_selection_predictions <- function(
 selection_performance_table <- rbind(
   evaluate_selection_predictions(
     method = "Logistic model with LASSO-selected variables",
-    sample_name = "Training (80%)",
+    sample_name = "Training (2020-2023)",
     observed = selection_training_data$mortality_30d,
     predicted_probability = lasso_training_probability,
     number_of_selected_predictors = length(lasso_selected_predictors)
   ),
   evaluate_selection_predictions(
     method = "Logistic model with LASSO-selected variables",
-    sample_name = "Test (20%)",
+    sample_name = "Validation (2024-2025)",
     observed = selection_test_data$mortality_30d,
     predicted_probability = lasso_test_probability,
     number_of_selected_predictors = length(lasso_selected_predictors)
   ),
   evaluate_selection_predictions(
     method = "Logistic model with stepwise-selected variables",
-    sample_name = "Training (80%)",
+    sample_name = "Training (2020-2023)",
     observed = selection_training_data$mortality_30d,
     predicted_probability = stepwise_training_probability,
     number_of_selected_predictors = length(stepwise_selected_predictors)
   ),
   evaluate_selection_predictions(
     method = "Logistic model with stepwise-selected variables",
-    sample_name = "Test (20%)",
+    sample_name = "Validation (2024-2025)",
     observed = selection_test_data$mortality_30d,
     predicted_probability = stepwise_test_probability,
     number_of_selected_predictors = length(stepwise_selected_predictors)
@@ -1305,7 +1418,7 @@ knitr::kable(
   selection_performance_table,
   align = c("l", "l", rep("r", 7)),
   caption = paste(
-    "Training and test performance with DeLong 95% AUC confidence intervals",
+    "Training (2020-2023) and validation (2024-2025) performance with DeLong 95% AUC confidence intervals",
     "for the logistic models refitted after variable selection"
   )
 )
