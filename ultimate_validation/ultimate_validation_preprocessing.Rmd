@@ -457,6 +457,23 @@ dichotomize_mais <- function(x) {
   ifelse(is.na(x), NA_integer_, as.integer(x >= 3))
 }
 
+# Severity of each anatomical region as a categorical variable. AIS 0 (no
+# injury in the region) is the reference category; the remaining severities are
+# grouped as 1-2 (minor/moderate), 3-4 (serious/severe) and 5-6 (critical/
+# maximal).
+categorize_mais <- function(x) {
+  factor(
+    case_when(
+      is.na(x) ~ NA_character_,
+      x == 0 ~ "0",
+      x %in% 1:2 ~ "1-2",
+      x %in% 3:4 ~ "3-4",
+      x %in% 5:6 ~ "5-6"
+    ),
+    levels = c("0", "1-2", "3-4", "5-6")
+  )
+}
+
 head_ais <- convert_regional_mais(raw_data$mais1)
 upper_extremity_ais <- convert_regional_mais(raw_data$mais2)
 thorax_ais <- convert_regional_mais(raw_data$mais3)
@@ -593,6 +610,7 @@ retrascore_cohort <- data.frame(
   gcs_le_8 = gcs_le_8,
   head_ais = head_ais,
   head_mais = dichotomize_mais(head_ais),
+  head_mais_group = categorize_mais(head_ais),
   thorax_ais = thorax_ais,
   thorax_mais = dichotomize_mais(thorax_ais),
   abdomen_ais = abdomen_ais,
@@ -958,13 +976,18 @@ knitr::kable(
 # Data-driven variable selection
 
 The following analyses do not use the predictors retained by the previous
-study as prior information. Both methods start from the same set of 21 eligible
-clinical candidate predictors. Identifiers, year, other outcomes, variables
+study as prior information. The three methods (LASSO, elastic net and stepwise
+AIC) start from the same set of 14 eligible
+clinical candidate predictors. Anatomical injury severity enters only through
+head injury, as a categorical variable (head AIS 0 = no injury, 1-2, 3-4 and
+5-6); the other anatomical regions are not offered to the selection methods. A
+variable is selected when any of its categories is retained.
+Identifiers, year, other outcomes, variables
 measured after the outcome, and the TRISS prediction are excluded.
 
 Variable selection is performed exclusively in the 2020-2023 training period
 defined for the first logistic regression. Patients with complete data for all
-21 candidates are assigned to the training (2020-2023) or validation
+14 candidates are assigned to the training (2020-2023) or validation
 (2024-2025) period by year of trauma. The 2024-2025 validation sample is not
 used for variable selection or model estimation.
 
@@ -998,13 +1021,7 @@ candidate_predictors <- c(
   "high_risk_mechanism",
   "pupils",
   "gcs_le_8",
-  "head_mais",
-  "thorax_mais",
-  "abdomen_mais",
-  "upper_extremity_mais",
-  "lower_extremity_mais",
-  "pelvis_mais",
-  "external_mais",
+  "head_mais_group",
   "hemodynamic_failure",
   "respiratory_failure",
   "coagulopathy_24h",
@@ -1123,11 +1140,93 @@ lasso_selected_predictors <- names(lasso_term_strength)[
 ]
 ```
 
+## Elastic net selection
+
+Elastic net combines the L1 (LASSO) and L2 (ridge) penalties, which makes
+selection more stable when predictors are correlated (for example, the MAIS
+scores of several body regions). The mixing parameter `alpha` is tuned together
+with `lambda`: for each `alpha` in the grid below, `glmnet::cv.glmnet` is run
+with the same ten outcome-stratified folds used for LASSO, and the `alpha` with
+the lowest cross-validated deviance is retained (`alpha = 1` is the LASSO
+already fitted above, so the grid covers only 0.1-0.9). For the chosen `alpha`,
+the conservative `lambda.1se` value determines the selected model, as in LASSO.
+A categorical predictor is considered selected when at least one of its
+indicator coefficients is nonzero.
+
+```{r elastic-net-selection}
+elastic_net_alpha_grid <- seq(0.1, 0.9, by = 0.1)
+
+elastic_net_cv_models <- lapply(
+  elastic_net_alpha_grid,
+  function(alpha_value) {
+    glmnet::cv.glmnet(
+      x = training_design_matrix,
+      y = training_outcome,
+      family = "binomial",
+      alpha = alpha_value,
+      foldid = fold_id,
+      type.measure = "deviance",
+      standardize = TRUE
+    )
+  }
+)
+
+elastic_net_alpha_table <- data.frame(
+  Alpha = elastic_net_alpha_grid,
+  `Lambda (1se)` = vapply(
+    elastic_net_cv_models, function(m) m$lambda.1se, numeric(1)
+  ),
+  `Minimum CV deviance` = vapply(
+    elastic_net_cv_models, function(m) min(m$cvm), numeric(1)
+  ),
+  check.names = FALSE
+)
+
+best_alpha_index <- which.min(elastic_net_alpha_table$`Minimum CV deviance`)
+elastic_net_alpha <- elastic_net_alpha_grid[best_alpha_index]
+elastic_net_cv_model <- elastic_net_cv_models[[best_alpha_index]]
+
+elastic_net_coefficients <- as.numeric(
+  coef(elastic_net_cv_model, s = "lambda.1se")[-1, 1]
+)
+names(elastic_net_coefficients) <- colnames(training_design_matrix)
+
+elastic_net_term_strength <- vapply(
+  seq_along(selection_term_labels),
+  function(term_index) {
+    max(abs(elastic_net_coefficients[design_assignment == term_index]))
+  },
+  numeric(1)
+)
+names(elastic_net_term_strength) <- selection_term_labels
+
+elastic_net_selected_predictors <- names(elastic_net_term_strength)[
+  elastic_net_term_strength > 0
+]
+
+elastic_net_alpha_table[c("Lambda (1se)", "Minimum CV deviance")] <- lapply(
+  elastic_net_alpha_table[c("Lambda (1se)", "Minimum CV deviance")],
+  round,
+  digits = 5
+)
+```
+
+```{r elastic-net-alpha-table, echo=FALSE}
+knitr::kable(
+  elastic_net_alpha_table,
+  align = c("r", "r", "r"),
+  caption = paste0(
+    "Cross-validated deviance by elastic-net mixing parameter (selected alpha = ",
+    elastic_net_alpha, ")"
+  )
+)
+```
+
 ## Stepwise selection
 
-Bidirectional stepwise selection starts from the full 21-predictor logistic
+Bidirectional stepwise selection starts from the full 14-predictor logistic
 model and minimizes Akaike's information criterion (AIC). It uses the same
-training patients as LASSO.
+training patients as LASSO and elastic net.
 
 ```{r stepwise-selection}
 full_selection_model <- glm(
@@ -1159,14 +1258,18 @@ stepwise_selected_predictors <- attr(
 
 ## Logistic models using the selected variables
 
-The selection methods determine the predictor sets only. Two standard,
+The selection methods determine the predictor sets only. Three standard,
 unpenalized multivariable logistic regressions are then fitted in the same
-2020-2023 training sample: one using the variables selected by LASSO and one using those
-selected by stepwise AIC.
+2020-2023 training sample: one using the variables selected by LASSO, one using those
+selected by elastic net and one using those selected by stepwise AIC.
 
 ```{r selected-logistic-models}
 lasso_refit_formula <- reformulate(
   termlabels = lasso_selected_predictors,
+  response = outcome_variable
+)
+elastic_net_refit_formula <- reformulate(
+  termlabels = elastic_net_selected_predictors,
   response = outcome_variable
 )
 stepwise_refit_formula <- reformulate(
@@ -1180,6 +1283,12 @@ lasso_refit_model <- glm(
   family = binomial(link = "logit"),
   na.action = na.fail
 )
+elastic_net_refit_model <- glm(
+  formula = elastic_net_refit_formula,
+  data = selection_training_data,
+  family = binomial(link = "logit"),
+  na.action = na.fail
+)
 stepwise_refit_model <- glm(
   formula = stepwise_refit_formula,
   data = selection_training_data,
@@ -1189,6 +1298,9 @@ stepwise_refit_model <- glm(
 
 if (!isTRUE(lasso_refit_model$converged) || anyNA(coef(lasso_refit_model))) {
   stop("The logistic model using LASSO-selected variables is not estimable.")
+}
+if (!isTRUE(elastic_net_refit_model$converged) || anyNA(coef(elastic_net_refit_model))) {
+  stop("The logistic model using elastic-net-selected variables is not estimable.")
 }
 if (!isTRUE(stepwise_refit_model$converged) || anyNA(coef(stepwise_refit_model))) {
   stop("The logistic model using stepwise-selected variables is not estimable.")
@@ -1208,15 +1320,27 @@ selection_results_table <- data.frame(
     "Yes",
     "No"
   ),
+  `Maximum absolute elastic-net coefficient` = unname(
+    elastic_net_term_strength[candidate_predictors]
+  ),
+  `Selected by elastic net` = ifelse(
+    candidate_predictors %in% elastic_net_selected_predictors,
+    "Yes",
+    "No"
+  ),
   `Selected by stepwise AIC` = ifelse(
     candidate_predictors %in% stepwise_selected_predictors,
     "Yes",
     "No"
   ),
-  `Selected by both` = ifelse(
-    candidate_predictors %in% intersect(
-      lasso_selected_predictors,
-      stepwise_selected_predictors
+  `Selected by all three methods` = ifelse(
+    candidate_predictors %in% Reduce(
+      intersect,
+      list(
+        lasso_selected_predictors,
+        elastic_net_selected_predictors,
+        stepwise_selected_predictors
+      )
     ),
     "Yes",
     "No"
@@ -1224,22 +1348,27 @@ selection_results_table <- data.frame(
   check.names = FALSE
 )
 
-selection_results_table$`Maximum absolute LASSO coefficient` <- round(
-  selection_results_table$`Maximum absolute LASSO coefficient`,
-  4
+coefficient_strength_columns <- c(
+  "Maximum absolute LASSO coefficient",
+  "Maximum absolute elastic-net coefficient"
+)
+selection_results_table[coefficient_strength_columns] <- lapply(
+  selection_results_table[coefficient_strength_columns],
+  round,
+  digits = 4
 )
 
 knitr::kable(
   selection_results_table,
-  align = c("l", "r", "c", "c", "c"),
-  caption = "Predictors selected independently by LASSO and stepwise AIC"
+  align = c("l", "r", "c", "r", "c", "c", "c"),
+  caption = "Predictors selected independently by LASSO, elastic net and stepwise AIC"
 )
 ```
 
 ## Coefficients of the refitted logistic models
 
-The following are ordinary logistic-regression coefficients, not penalized
-LASSO coefficients. Confidence intervals are Wald 95% intervals.
+The following are ordinary logistic-regression coefficients, not
+penalized (LASSO or elastic-net) coefficients. Confidence intervals are Wald 95% intervals.
 
 ```{r coefficient-table-function, echo=FALSE}
 logistic_coefficient_table <- function(model) {
@@ -1294,6 +1423,23 @@ knitr::kable(
 )
 ```
 
+### Logistic regression with elastic-net-selected variables
+
+```{r elastic-net-coefficient-table, echo=FALSE}
+elastic_net_coefficient_table <- logistic_coefficient_table(
+  elastic_net_refit_model
+)
+
+knitr::kable(
+  elastic_net_coefficient_table,
+  align = c("l", rep("r", 6)),
+  caption = paste(
+    "Logistic regression fitted with the variables selected by elastic net",
+    "in the 2020-2023 training period"
+  )
+)
+```
+
 ### Logistic regression with stepwise-selected variables
 
 ```{r stepwise-coefficient-table, echo=FALSE}
@@ -1311,7 +1457,7 @@ knitr::kable(
 
 ## Training and test AUC of the refitted logistic models
 
-Predictions use the two unpenalized logistic models refitted after variable
+Predictions use the three unpenalized logistic models refitted after variable
 selection. Performance is reported both in the 2020-2023 training sample and in
 the 2024-2025 validation sample (patients with complete data for all candidate
 predictors). The validation AUC therefore measures temporal discrimination in
@@ -1326,6 +1472,16 @@ lasso_training_probability <- predict(
 )
 lasso_test_probability <- predict(
   lasso_refit_model,
+  newdata = selection_test_data,
+  type = "response"
+)
+elastic_net_training_probability <- predict(
+  elastic_net_refit_model,
+  newdata = selection_training_data,
+  type = "response"
+)
+elastic_net_test_probability <- predict(
+  elastic_net_refit_model,
   newdata = selection_test_data,
   type = "response"
 )
@@ -1390,6 +1546,20 @@ selection_performance_table <- rbind(
     number_of_selected_predictors = length(lasso_selected_predictors)
   ),
   evaluate_selection_predictions(
+    method = "Logistic model with elastic-net-selected variables",
+    sample_name = "Training (2020-2023)",
+    observed = selection_training_data$mortality_30d,
+    predicted_probability = elastic_net_training_probability,
+    number_of_selected_predictors = length(elastic_net_selected_predictors)
+  ),
+  evaluate_selection_predictions(
+    method = "Logistic model with elastic-net-selected variables",
+    sample_name = "Validation (2024-2025)",
+    observed = selection_test_data$mortality_30d,
+    predicted_probability = elastic_net_test_probability,
+    number_of_selected_predictors = length(elastic_net_selected_predictors)
+  ),
+  evaluate_selection_predictions(
     method = "Logistic model with stepwise-selected variables",
     sample_name = "Training (2020-2023)",
     observed = selection_training_data$mortality_30d,
@@ -1425,3 +1595,170 @@ knitr::kable(
 ```
 
 
+# Models restricted to significant predictors
+
+The refitted models above can retain predictors whose coefficients are not
+statistically significant. Here, each of the three logistic models is simplified
+by backward elimination in the 2020-2023 training sample: the predictor with the
+highest likelihood-ratio p value (`drop1`, chi-squared test, evaluated per
+variable so that all categories of a factor are kept or removed together) is
+removed, the model is refitted, and the process is repeated until every
+remaining predictor has p < 0.05. Each anatomical region is therefore kept
+with all its severity categories (1-2, 3-4, 5-6) if at least one of them is
+significant, so individual categories of a retained variable can still have
+p >= 0.05. The 2024-2025 validation sample is not used.
+
+```{r significant-only-models}
+significance_threshold <- 0.05
+
+eliminate_nonsignificant_predictors <- function(model, threshold) {
+  removed_predictors <- character(0)
+  repeat {
+    term_tests <- drop1(model, test = "Chisq")
+    term_tests <- term_tests[rownames(term_tests) != "<none>", , drop = FALSE]
+    if (nrow(term_tests) == 0L) break
+    p_values <- term_tests[["Pr(>Chi)"]]
+    worst_index <- which.max(p_values)
+    if (p_values[worst_index] < threshold) break
+    removed_term <- rownames(term_tests)[worst_index]
+    removed_predictors <- c(removed_predictors, removed_term)
+    model <- update(model, as.formula(paste(". ~ . -", removed_term)))
+  }
+  list(model = model, removed = removed_predictors)
+}
+
+lasso_significant <- eliminate_nonsignificant_predictors(
+  lasso_refit_model, significance_threshold
+)
+elastic_net_significant <- eliminate_nonsignificant_predictors(
+  elastic_net_refit_model, significance_threshold
+)
+stepwise_significant <- eliminate_nonsignificant_predictors(
+  stepwise_refit_model, significance_threshold
+)
+
+lasso_significant_model <- lasso_significant$model
+elastic_net_significant_model <- elastic_net_significant$model
+stepwise_significant_model <- stepwise_significant$model
+```
+
+```{r significant-removed-table, echo=FALSE}
+removed_predictors_table <- data.frame(
+  Method = c("LASSO", "Elastic net", "Stepwise AIC"),
+  `Predictors before` = c(
+    length(lasso_selected_predictors),
+    length(elastic_net_selected_predictors),
+    length(stepwise_selected_predictors)
+  ),
+  `Predictors after` = c(
+    length(attr(terms(lasso_significant_model), "term.labels")),
+    length(attr(terms(elastic_net_significant_model), "term.labels")),
+    length(attr(terms(stepwise_significant_model), "term.labels"))
+  ),
+  `Removed predictors (in order of removal)` = vapply(
+    list(
+      lasso_significant$removed,
+      elastic_net_significant$removed,
+      stepwise_significant$removed
+    ),
+    function(x) if (length(x) == 0L) "None" else paste(x, collapse = ", "),
+    character(1)
+  ),
+  check.names = FALSE
+)
+
+knitr::kable(
+  removed_predictors_table,
+  align = c("l", "r", "r", "l"),
+  caption = "Predictors removed because of p >= 0.05 (likelihood-ratio test)"
+)
+```
+
+## Coefficients of the models with significant predictors only
+
+### Logistic regression with LASSO-selected significant variables
+
+```{r lasso-significant-coefficient-table, echo=FALSE}
+knitr::kable(
+  logistic_coefficient_table(lasso_significant_model),
+  align = c("l", rep("r", 6)),
+  caption = "Logistic regression with LASSO-selected variables, significant predictors only (2020-2023 training period)"
+)
+```
+
+### Logistic regression with elastic-net-selected significant variables
+
+```{r elastic-net-significant-coefficient-table, echo=FALSE}
+knitr::kable(
+  logistic_coefficient_table(elastic_net_significant_model),
+  align = c("l", rep("r", 6)),
+  caption = "Logistic regression with elastic-net-selected variables, significant predictors only (2020-2023 training period)"
+)
+```
+
+### Logistic regression with stepwise-selected significant variables
+
+```{r stepwise-significant-coefficient-table, echo=FALSE}
+knitr::kable(
+  logistic_coefficient_table(stepwise_significant_model),
+  align = c("l", rep("r", 6)),
+  caption = "Logistic regression with stepwise-selected variables, significant predictors only (2020-2023 training period)"
+)
+```
+
+## Training and validation AUC of the models with significant predictors only
+
+```{r significant-performance-table, echo=FALSE}
+significant_models <- list(
+  "Logistic model with LASSO-selected significant variables" =
+    lasso_significant_model,
+  "Logistic model with elastic-net-selected significant variables" =
+    elastic_net_significant_model,
+  "Logistic model with stepwise-selected significant variables" =
+    stepwise_significant_model
+)
+
+significant_performance_table <- do.call(
+  rbind,
+  lapply(names(significant_models), function(method_name) {
+    model <- significant_models[[method_name]]
+    number_of_predictors <- length(attr(terms(model), "term.labels"))
+    rbind(
+      evaluate_selection_predictions(
+        method = method_name,
+        sample_name = "Training (2020-2023)",
+        observed = selection_training_data$mortality_30d,
+        predicted_probability = predict(
+          model, newdata = selection_training_data, type = "response"
+        ),
+        number_of_selected_predictors = number_of_predictors
+      ),
+      evaluate_selection_predictions(
+        method = method_name,
+        sample_name = "Validation (2024-2025)",
+        observed = selection_test_data$mortality_30d,
+        predicted_probability = predict(
+          model, newdata = selection_test_data, type = "response"
+        ),
+        number_of_selected_predictors = number_of_predictors
+      )
+    )
+  })
+)
+
+significant_performance_table[performance_columns] <- lapply(
+  significant_performance_table[performance_columns],
+  round,
+  digits = 3
+)
+
+knitr::kable(
+  significant_performance_table,
+  align = c("l", "l", rep("r", 7)),
+  caption = paste(
+    "Training (2020-2023) and validation (2024-2025) performance with",
+    "DeLong 95% AUC confidence intervals for the models restricted to",
+    "significant predictors"
+  )
+)
+```

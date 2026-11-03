@@ -1,0 +1,400 @@
+---
+title: "RETRASCORE - Heatmap de lesiones graves por región anatómica AIS"
+subtitle: "Cruce de las 9 regiones AIS y mortalidad a 30 días"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    number_sections: true
+date: "`r format(Sys.Date(), '%Y-%m-%d')`"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+
+required_packages <- c("dplyr", "lubridate", "ggplot2", "knitr")
+missing_packages <- required_packages[
+  !vapply(required_packages, requireNamespace, logical(1), quietly = TRUE)
+]
+if (length(missing_packages) > 0L) {
+  stop(
+    "Instale los siguientes paquetes antes de generar el informe: ",
+    paste(missing_packages, collapse = ", ")
+  )
+}
+
+library(dplyr)
+library(lubridate)
+library(ggplot2)
+```
+
+# Objetivo
+
+Se cruzan las **9 regiones anatómicas AIS** (cráneo, cara, cuello, tórax,
+abdomen, columna vertebral, extremidades superiores, extremidades inferiores y
+piel/partes blandas). Para cada pareja de regiones se muestra el número de
+pacientes que tienen una **lesión grave (AIS máximo >= 3) en ambas regiones** y
+la **mortalidad a 30 días** de esos pacientes. El **color** del heatmap depende
+de la n (no de la mortalidad). La diagonal contiene todos los
+pacientes con lesión grave en esa región. A la derecha se añade la columna
+**"Solo esta lesión"**: pacientes con lesión grave en esa región y en ninguna
+otra.
+
+Las regiones AIS proceden de `lesion_X_region_ais` y la gravedad de
+`lesion_X_gravedad` (32 lesiones por paciente). Se utiliza
+`retrauci_regiones_ais_completas.csv`, en el que las regiones vacías se han
+completado a partir del nombre de la lesión. **No** se usan las columnas
+`mais1`-`mais6`.
+
+# Parámetros
+
+```{r parametros}
+input_file <- "retrauci_regiones_ais_completas.csv"
+output_dir <- "outputs_heatmap_lesiones_ais"
+
+year_range <- c(2015L, 2025L)   # año del trauma
+minimum_age <- 18               # se eliminan los menores de 18 años
+severe_threshold <- 3           # lesión grave: AIS máximo de la región >= 3
+number_of_lesions <- 32L
+
+region_names <- c(
+  "Craneo", "Cara", "Cuello", "Torax", "Abdomen",
+  "Columna vertebral", "Extremidades superiores",
+  "Extremidades inferiores", "Piel y partes blandas"
+)
+
+dir.create(output_dir, showWarnings = FALSE)
+```
+
+# Lectura y preparación de datos
+
+```{r lectura}
+if (!file.exists(input_file)) {
+  stop("No se encuentra ", input_file, " en la carpeta del documento.")
+}
+
+# Todo se lee como texto para no alterar identificadores ni códigos.
+raw_data <- read.csv2(
+  input_file,
+  stringsAsFactors = FALSE,
+  colClasses = "character",
+  na.strings = NULL
+)
+
+clean_text <- function(x) {
+  x <- tolower(trimws(as.character(x)))
+  x[x %in% c("", "na", "nas")] <- NA_character_
+  x
+}
+
+clean_number <- function(x) {
+  x <- trimws(as.character(x))
+  x[x %in% c("", "NA", "NAS")] <- NA_character_
+  suppressWarnings(as.numeric(gsub(",", ".", x)))
+}
+
+parse_dates <- function(x) {
+  x <- trimws(as.character(x))
+  x[x %in% c("", "NA", "NAS")] <- NA_character_
+  suppressWarnings(
+    parse_date_time(x, orders = c("dmy", "ymd", "dmy HMS", "ymd HMS"))
+  )
+}
+
+trauma_date <- parse_dates(raw_data$fecha_trauma)
+icu_discharge_date <- parse_dates(raw_data$fecha_alta_uci)
+hospital_discharge_date <- parse_dates(raw_data$fecha_alta_hospital)
+death_recorded_date <- parse_dates(raw_data$fecha_exitus)
+```
+
+## Mortalidad a 30 días
+
+La definición es la del documento `ultimate_validation_preprocessing.Rmd`: la
+mortalidad intrahospitalaria combina `evolucion_uci` y `evolucion_hospitalaria`,
+y la mortalidad a 30 días vale 1 si el paciente fallece en los 30 días
+siguientes al trauma y 0 si sobrevive al alta hospitalaria o fallece después del
+día 30. Los fallecidos sin fecha válida quedan con desenlace desconocido y se
+excluyen.
+
+```{r mortalidad-30d}
+death_labels <- c("exitus", "exitus y donacion")
+icu_outcome <- clean_text(raw_data$evolucion_uci)
+hospital_outcome <- clean_text(raw_data$evolucion_hospitalaria)
+
+in_hospital_mortality <- case_when(
+  icu_outcome %in% death_labels ~ 1L,
+  hospital_outcome %in% death_labels ~ 1L,
+  hospital_outcome == "alta" ~ 0L,
+  TRUE ~ NA_integer_
+)
+
+icu_death <- icu_outcome %in% death_labels
+hospital_death <- hospital_outcome %in% death_labels
+
+death_date <- as.POSIXct(
+  rep(NA_real_, nrow(raw_data)),
+  origin = "1970-01-01", tz = "UTC"
+)
+death_date[icu_death] <- icu_discharge_date[icu_death]
+death_date[hospital_death] <- hospital_discharge_date[hospital_death]
+
+use_recorded_date <- in_hospital_mortality == 1 & is.na(death_date) &
+  !is.na(death_recorded_date)
+use_recorded_date[is.na(use_recorded_date)] <- FALSE
+death_date[use_recorded_date] <- death_recorded_date[use_recorded_date]
+
+days_to_death <- as.numeric(
+  difftime(death_date, trauma_date, units = "days")
+)
+valid_death_date <- !is.na(days_to_death) & days_to_death >= 0
+
+mortality_30d <- case_when(
+  in_hospital_mortality == 0 ~ 0L,
+  in_hospital_mortality == 1 & valid_death_date & days_to_death <= 30 ~ 1L,
+  in_hospital_mortality == 1 & valid_death_date & days_to_death > 30 ~ 0L,
+  TRUE ~ NA_integer_
+)
+```
+
+## Selección de pacientes
+
+```{r seleccion}
+trauma_year <- year(trauma_date)
+age <- clean_number(raw_data$edad)
+
+in_period <- !is.na(trauma_year) &
+  trauma_year >= year_range[1] & trauma_year <= year_range[2]
+is_minor <- !is.na(age) & age < minimum_age
+known_outcome <- !is.na(mortality_30d)
+
+keep <- in_period & !is_minor & known_outcome
+
+selection_flow <- data.frame(
+  Paso = c(
+    "Registros iniciales",
+    paste0("Año del trauma ", year_range[1], "-", year_range[2]),
+    paste0("Menores de ", minimum_age, " años eliminados"),
+    "Mortalidad a 30 días desconocida (eliminados)",
+    "Pacientes analizados"
+  ),
+  n = c(
+    nrow(raw_data),
+    sum(in_period),
+    sum(in_period & is_minor),
+    sum(in_period & !is_minor & !known_outcome),
+    sum(keep)
+  )
+)
+knitr::kable(selection_flow, align = c("l", "r"))
+
+cohort <- raw_data[keep, , drop = FALSE]
+died <- mortality_30d[keep]
+```
+
+# Lesión grave por región AIS
+
+Para cada paciente y región se toma el AIS máximo entre sus lesiones de esa
+región. La región se considera con lesión grave si ese máximo es mayor o igual
+que `severe_threshold`. Los pacientes sin ninguna lesión grave no aparecen en
+ninguna celda del heatmap. Las lesiones sin región (1-9) o sin gravedad (1-6)
+válida no se pueden asignar y se ignoran.
+
+```{r ais-regional}
+lesion_region <- sapply(
+  cohort[paste0("lesion_", 0:(number_of_lesions - 1L), "_region_ais")],
+  clean_number
+)
+lesion_severity <- sapply(
+  cohort[paste0("lesion_", 0:(number_of_lesions - 1L), "_gravedad")],
+  clean_number
+)
+lesion_region[!(lesion_region %in% 1:9)] <- NA_real_
+lesion_severity[!(lesion_severity %in% 1:6)] <- NA_real_
+
+max_ais_by_region <- sapply(1:9, function(region_code) {
+  severity <- ifelse(lesion_region == region_code, lesion_severity, NA_real_)
+  result <- suppressWarnings(apply(severity, 1, max, na.rm = TRUE))
+  result[is.infinite(result)] <- 0
+  result
+})
+colnames(max_ais_by_region) <- region_names
+
+severe_matrix <- (max_ais_by_region >= severe_threshold) * 1L
+
+lesions_without_valid_data <- sum(
+  !is.na(lesion_region) & is.na(lesion_severity)
+)
+
+injury_summary <- data.frame(
+  Region = region_names,
+  `Pacientes con lesion grave` = colSums(severe_matrix),
+  `% de pacientes` = round(100 * colSums(severe_matrix) / nrow(cohort), 1),
+  check.names = FALSE
+)
+knitr::kable(injury_summary, align = c("l", "r", "r"))
+
+cat(
+  "\nPacientes sin ninguna lesión grave (AIS >= ", severe_threshold, "): ",
+  sum(rowSums(severe_matrix) == 0L), " (",
+  round(100 * mean(rowSums(severe_matrix) == 0L), 1), "%)\n",
+  "Lesiones con región pero sin gravedad válida (ignoradas): ",
+  lesions_without_valid_data, "\n", sep = ""
+)
+```
+
+# Cruce de regiones y mortalidad
+
+```{r matrices}
+# n[i, j]: pacientes con lesión grave en la región i y en la región j.
+# La diagonal es el total de pacientes con lesión grave en esa región.
+n_matrix <- crossprod(severe_matrix)
+death_matrix <- crossprod(severe_matrix, severe_matrix * died)
+
+# Pacientes con lesión grave únicamente en una región.
+only_matrix <- severe_matrix * (rowSums(severe_matrix) == 1L)
+n_only <- colSums(only_matrix)
+death_only <- colSums(only_matrix * died)
+
+pct <- function(deaths, n) ifelse(n > 0, 100 * deaths / n, NA_real_)
+
+heat_data <- expand.grid(row_idx = 1:9, col_idx = 1:9)
+heat_data$n <- n_matrix[cbind(heat_data$row_idx, heat_data$col_idx)]
+heat_data$deaths <- death_matrix[cbind(heat_data$row_idx, heat_data$col_idx)]
+heat_data$x <- heat_data$col_idx
+
+only_data <- data.frame(
+  row_idx = 1:9, col_idx = 10L, n = n_only, deaths = death_only, x = 10.6
+)
+
+heat_data <- rbind(heat_data, only_data)
+heat_data$mortality <- pct(heat_data$deaths, heat_data$n)
+heat_data$y <- 10 - heat_data$row_idx
+heat_data$label <- ifelse(
+  heat_data$n == 0,
+  "0",
+  sprintf("%d\n%.1f%%", heat_data$n, heat_data$mortality)
+)
+
+# El color depende de n. Con la escala de raíz cuadrada se distinguen mejor
+# las celdas pequeñas frente a las diagonales, que son mucho mayores.
+max_n <- max(heat_data$n)
+heat_data$text_colour <- ifelse(
+  sqrt(heat_data$n) > 0.55 * sqrt(max_n), "white", "black"
+)
+```
+
+```{r heatmap, fig.width=14, fig.height=9.5, dpi=130}
+diagonal_data <- heat_data[
+  heat_data$col_idx == heat_data$row_idx & heat_data$x <= 9,
+]
+
+heatmap_plot <- ggplot(heat_data, aes(x = x, y = y)) +
+  geom_tile(
+    aes(fill = n),
+    colour = "white", linewidth = 0.8, width = 1, height = 1
+  ) +
+  geom_tile(
+    data = diagonal_data, fill = NA, colour = "black", linewidth = 1,
+    width = 1, height = 1
+  ) +
+  geom_text(
+    aes(label = label, colour = text_colour),
+    size = 3.4, lineheight = 0.9
+  ) +
+  scale_colour_identity() +
+  scale_fill_viridis_c(
+    option = "magma", direction = -1, trans = "sqrt",
+    breaks = c(10, 50, 200, 500, 1000, 2000, 4000, 7000),
+    name = "n pacientes\n(escala raíz\ncuadrada)"
+  ) +
+  scale_x_continuous(
+    breaks = c(1:9, 10.6),
+    labels = c(region_names, "Solo esta\nlesion"),
+    position = "top", expand = c(0.01, 0.01)
+  ) +
+  scale_y_continuous(
+    breaks = 9:1, labels = region_names, expand = c(0.01, 0.01)
+  ) +
+  labs(
+    title = paste0(
+      "Lesiones graves (AIS >= ", severe_threshold,
+      ") por región anatómica y mortalidad a 30 días"
+    ),
+    subtitle = paste0(
+      "Color = n pacientes con lesión grave en ambas regiones. Cada recuadro ",
+      "indica n y % de mortalidad a 30 días. Diagonal = total de la región.\n",
+      "Pacientes ", year_range[1], "-", year_range[2],
+      ", edad >= ", minimum_age, " (N = ", nrow(cohort), ")."
+    ),
+    x = NULL, y = NULL
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(
+    panel.grid = element_blank(),
+    axis.text.x.top = element_text(angle = 35, hjust = 0, vjust = 0),
+    plot.subtitle = element_text(size = 10)
+  )
+
+ggsave(
+  file.path(output_dir, "heatmap_lesiones_ais.png"),
+  heatmap_plot, width = 14, height = 9.5, dpi = 200
+)
+heatmap_plot
+```
+
+# Tablas
+
+## Lesión grave en una sola región ("Solo esta lesión")
+
+```{r tabla-solo}
+only_table <- data.frame(
+  Region = region_names,
+  `n total region` = as.integer(diag(n_matrix)),
+  `n solo esta lesion` = as.integer(n_only),
+  `% sobre el total de la region` = round(100 * n_only / diag(n_matrix), 1),
+  `Fallecidos (30 d)` = as.integer(death_only),
+  `Mortalidad (%)` = round(pct(death_only, n_only), 1),
+  check.names = FALSE
+)
+knitr::kable(
+  only_table, align = c("l", rep("r", 5)),
+  caption = "Pacientes con lesión grave únicamente en la región indicada"
+)
+```
+
+## Combinaciones de dos regiones
+
+```{r tabla-pares}
+pair_table <- do.call(rbind, lapply(1:8, function(i) {
+  do.call(rbind, lapply((i + 1):9, function(j) {
+    data.frame(
+      `Region A` = region_names[i],
+      `Region B` = region_names[j],
+      n = as.integer(n_matrix[i, j]),
+      `Fallecidos (30 d)` = as.integer(death_matrix[i, j]),
+      `Mortalidad (%)` = round(pct(death_matrix[i, j], n_matrix[i, j]), 1),
+      check.names = FALSE
+    )
+  }))
+}))
+pair_table <- pair_table[order(-pair_table$n), ]
+rownames(pair_table) <- NULL
+
+utils::write.csv(
+  pair_table, file.path(output_dir, "cruce_regiones_ais.csv"),
+  row.names = FALSE, fileEncoding = "UTF-8"
+)
+utils::write.csv(
+  only_table, file.path(output_dir, "solo_una_region_ais.csv"),
+  row.names = FALSE, fileEncoding = "UTF-8"
+)
+
+knitr::kable(
+  pair_table, align = c("l", "l", rep("r", 3)),
+  caption = "Pacientes con lesión grave en ambas regiones (ordenado por n)"
+)
+```
+
+Cada recuadro del heatmap cuenta al paciente en todas las parejas de regiones
+en las que tiene lesión grave, por lo que un mismo paciente aparece en varias
+celdas. Las celdas con pocos pacientes dan porcentajes de mortalidad inestables.

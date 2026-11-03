@@ -1,0 +1,37 @@
+"Region A","Region B","n","Fallecidos (30 d)","Mortalidad (%)"
+"Craneo","Torax",1764,485,27.5
+"Torax","Extremidades inferiores",1445,233,16.1
+"Torax","Abdomen",1196,170,14.2
+"Torax","Columna vertebral",759,120,15.8
+"Craneo","Extremidades inferiores",717,195,27.2
+"Abdomen","Extremidades inferiores",544,104,19.1
+"Craneo","Columna vertebral",361,109,30.2
+"Craneo","Abdomen",351,121,34.5
+"Craneo","Cara",336,81,24.1
+"Columna vertebral","Extremidades inferiores",333,58,17.4
+"Torax","Extremidades superiores",209,33,15.8
+"Cara","Torax",182,40,22
+"Extremidades superiores","Extremidades inferiores",175,19,10.9
+"Abdomen","Columna vertebral",166,37,22.3
+"Cara","Extremidades inferiores",119,21,17.6
+"Craneo","Extremidades superiores",115,26,22.6
+"Abdomen","Extremidades superiores",71,12,16.9
+"Cara","Abdomen",48,12,25
+"Cuello","Torax",48,9,18.8
+"Columna vertebral","Extremidades superiores",42,10,23.8
+"Cara","Columna vertebral",34,13,38.2
+"Craneo","Cuello",33,9,27.3
+"Cara","Extremidades superiores",26,0,0
+"Torax","Piel y partes blandas",17,9,52.9
+"Cuello","Columna vertebral",16,5,31.2
+"Cuello","Extremidades inferiores",14,4,28.6
+"Cuello","Abdomen",11,4,36.4
+"Craneo","Piel y partes blandas",10,5,50
+"Extremidades inferiores","Piel y partes blandas",10,5,50
+"Cara","Cuello",4,0,0
+"Abdomen","Piel y partes blandas",4,4,100
+"Extremidades superiores","Piel y partes blandas",3,1,33.3
+"Cara","Piel y partes blandas",2,1,50
+"Cuello","Piel y partes blandas",2,1,50
+"Cuello","Extremidades superiores",1,0,0
+"Columna vertebral","Piel y partes blandas",1,1,100
