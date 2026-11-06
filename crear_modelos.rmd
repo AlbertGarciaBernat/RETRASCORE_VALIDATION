@@ -101,6 +101,7 @@ predictores <- c(
 # Para desactivar una interaccion, comente su linea con #.
 interacciones <- c(
   #"mais_torax:fallo_hemodinamico"
+  "mais_abdomen:mais_cabeza"
 )
 ```
 

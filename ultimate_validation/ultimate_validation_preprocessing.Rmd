@@ -457,22 +457,21 @@ dichotomize_mais <- function(x) {
   ifelse(is.na(x), NA_integer_, as.integer(x >= 3))
 }
 
-# Severity of each anatomical region as a categorical variable. AIS 0 (no
-# injury in the region) is the reference category; the remaining severities are
-# grouped as 1-2 (minor/moderate), 3-4 (serious/severe) and 5-6 (critical/
-# maximal).
+# Severity of each anatomical region as a Yes/No variable: "Yes" when the
+# regional AIS is 4 or higher, "No" when it is 3 or lower (including 0 = no
+# injury in the region). "No" is the reference category.
 categorize_mais <- function(x) {
   factor(
     case_when(
       is.na(x) ~ NA_character_,
-      x == 0 ~ "0",
-      x %in% 1:2 ~ "1-2",
-      x %in% 3:4 ~ "3-4",
-      x %in% 5:6 ~ "5-6"
+      x >= 4 ~ "Yes",
+      x <= 3 ~ "No"
     ),
-    levels = c("0", "1-2", "3-4", "5-6")
+    levels = c("No", "Yes")
   )
 }
+
+# Regional AIS values -------------------------------------------------------
 
 head_ais <- convert_regional_mais(raw_data$mais1)
 upper_extremity_ais <- convert_regional_mais(raw_data$mais2)
@@ -613,17 +612,22 @@ retrascore_cohort <- data.frame(
   head_mais_group = categorize_mais(head_ais),
   thorax_ais = thorax_ais,
   thorax_mais = dichotomize_mais(thorax_ais),
+  thorax_mais_group = categorize_mais(thorax_ais),
   abdomen_ais = abdomen_ais,
   abdomen_mais = dichotomize_mais(abdomen_ais),
+  abdomen_mais_group = categorize_mais(abdomen_ais),
   upper_extremity_ais = upper_extremity_ais,
   upper_extremity_mais = dichotomize_mais(upper_extremity_ais),
+  upper_extremity_mais_group = categorize_mais(upper_extremity_ais),
   lower_extremity_incl_pelvis_ais = lower_extremity_incl_pelvis_ais,
+  lower_extremity_incl_pelvis_mais_group = categorize_mais(lower_extremity_incl_pelvis_ais),
   lower_extremity_ais = lower_extremity_ais,
   lower_extremity_mais = dichotomize_mais(lower_extremity_ais),
   pelvis_ais = pelvis_ais,
   pelvis_mais = dichotomize_mais(pelvis_ais),
   external_ais = external_ais,
   external_mais = dichotomize_mais(external_ais),
+  external_mais_group = categorize_mais(external_ais),
   hemodynamic_failure = hemodynamic_failure,
   respiratory_failure = respiratory_failure,
   coagulopathy_24h = coagulopathy_24h,
@@ -977,17 +981,17 @@ knitr::kable(
 
 The following analyses do not use the predictors retained by the previous
 study as prior information. The three methods (LASSO, elastic net and stepwise
-AIC) start from the same set of 14 eligible
-clinical candidate predictors. Anatomical injury severity enters only through
-head injury, as a categorical variable (head AIS 0 = no injury, 1-2, 3-4 and
-5-6); the other anatomical regions are not offered to the selection methods. A
-variable is selected when any of its categories is retained.
+AIC) start from the same set of 17 eligible
+clinical candidate predictors. Anatomical injury severity enters through all
+six regions (head, upper extremity, thorax, abdomen, lower extremity including
+pelvis, and external), each as a Yes/No variable (regional AIS >= 4 = Yes,
+AIS <= 3 = No). A variable is selected when it is retained.
 Identifiers, year, other outcomes, variables
 measured after the outcome, and the TRISS prediction are excluded.
 
 Variable selection is performed exclusively in the 2020-2023 training period
 defined for the first logistic regression. Patients with complete data for all
-14 candidates are assigned to the training (2020-2023) or validation
+17 candidates are assigned to the training (2020-2023) or validation
 (2024-2025) period by year of trauma. The 2024-2025 validation sample is not
 used for variable selection or model estimation.
 
@@ -1012,21 +1016,25 @@ if (length(missing_selection_packages) > 0L) {
 # All eligible predictors are offered to both selection methods without
 # assigning priority to any variable.
 candidate_predictors <- c(
+  # Non-anatomical predictors of the original study
   "age_category",
-  "male",
   "preinjury_antithrombotic",
-  "physician_prehospital_care",
   "prehospital_intubation",
-  "penetrating_trauma",
   "high_risk_mechanism",
   "pupils",
   "gcs_le_8",
-  "head_mais_group",
   "hemodynamic_failure",
   "respiratory_failure",
   "coagulopathy_24h",
   "mechanical_ventilation",
-  "massive_hemorrhage"
+  "massive_hemorrhage",
+  # The six anatomical regions (mais1-mais6), each as Yes (AIS >= 4) / No
+  "head_mais_group",
+  "upper_extremity_mais_group",
+  "thorax_mais_group",
+  "abdomen_mais_group",
+  "lower_extremity_incl_pelvis_mais_group",
+  "external_mais_group"
 )
 
 selection_variables <- c(
@@ -1224,7 +1232,7 @@ knitr::kable(
 
 ## Stepwise selection
 
-Bidirectional stepwise selection starts from the full 14-predictor logistic
+Bidirectional stepwise selection starts from the full 17-predictor logistic
 model and minimizes Akaike's information criterion (AIC). It uses the same
 training patients as LASSO and elastic net.
 
@@ -1595,6 +1603,181 @@ knitr::kable(
 ```
 
 
+# Interaction models: head x abdomen and head x thorax
+
+The logistic model fitted with the variables selected by stepwise AIC is
+compared with two otherwise identical models that add one interaction term
+between anatomical regions: head x abdomen and head x thorax (each region coded
+Yes if AIS >= 4 and No if AIS <= 3). If a region of the interaction was not
+selected by stepwise AIC, its main effect is added together with the
+interaction. All models are fitted in the 2020-2023 training sample and
+evaluated in the 2024-2025 validation sample. The likelihood-ratio test compares
+each interaction model with the stepwise model without interaction; the DeLong
+test compares the validation AUC of each interaction model with that of the
+stepwise model (paired, same patients).
+
+```{r interaction-models, echo=FALSE}
+interaction_specs <- list(
+  "Stepwise model + head x abdomen" = c("head_mais_group", "abdomen_mais_group"),
+  "Stepwise model + head x thorax" = c("head_mais_group", "thorax_mais_group")
+)
+
+interaction_models <- lapply(interaction_specs, function(regions) {
+  interaction_formula <- as.formula(
+    paste(". ~ . +", paste(regions, collapse = " * "))
+  )
+  model <- glm(
+    formula = update(stepwise_refit_formula, interaction_formula),
+    data = selection_training_data,
+    family = binomial(link = "logit"),
+    na.action = na.fail
+  )
+  if (!isTRUE(model$converged) || anyNA(coef(model))) {
+    warning("An interaction model did not converge or has inestimable terms.")
+  }
+  model
+})
+
+all_interaction_models <- c(
+  list("Stepwise model (no interaction)" = stepwise_refit_model),
+  interaction_models
+)
+
+# Likelihood-ratio comparison against the stepwise model.
+model_comparison_table <- do.call(rbind, lapply(
+  names(all_interaction_models),
+  function(model_name) {
+    model <- all_interaction_models[[model_name]]
+    is_reference <- identical(model_name, "Stepwise model (no interaction)")
+    lr_test <- if (is_reference) {
+      NULL
+    } else {
+      anova(stepwise_refit_model, model, test = "Chisq")
+    }
+    data.frame(
+      Model = model_name,
+      Parameters = length(coef(model)),
+      AIC = AIC(model),
+      BIC = BIC(model),
+      Deviance = deviance(model),
+      `LR chi-squared` = if (is_reference) NA_real_ else lr_test$Deviance[2],
+      `LR df` = if (is_reference) NA_real_ else lr_test$Df[2],
+      `LR p value` = if (is_reference) NA_real_ else lr_test$`Pr(>Chi)`[2],
+      check.names = FALSE
+    )
+  }
+))
+model_comparison_table[c("AIC", "BIC", "Deviance", "LR chi-squared")] <-
+  lapply(
+    model_comparison_table[c("AIC", "BIC", "Deviance", "LR chi-squared")],
+    round, digits = 2
+  )
+model_comparison_table$`LR p value` <- ifelse(
+  is.na(model_comparison_table$`LR p value`),
+  "",
+  format.pval(model_comparison_table$`LR p value`, digits = 3, eps = 0.001)
+)
+model_comparison_table[is.na(model_comparison_table)] <- ""
+
+knitr::kable(
+  model_comparison_table,
+  align = c("l", rep("r", 7)),
+  caption = "Stepwise-AIC logistic model compared with models adding a head x abdomen or head x thorax interaction (training sample 2020-2023)"
+)
+```
+
+```{r interaction-performance-table, echo=FALSE}
+interaction_performance_table <- do.call(rbind, lapply(
+  names(all_interaction_models),
+  function(model_name) {
+    model <- all_interaction_models[[model_name]]
+    number_of_terms <- length(attr(terms(model), "term.labels"))
+    rbind(
+      evaluate_selection_predictions(
+        method = model_name,
+        sample_name = "Training (2020-2023)",
+        observed = selection_training_data$mortality_30d,
+        predicted_probability = predict(
+          model, newdata = selection_training_data, type = "response"
+        ),
+        number_of_selected_predictors = number_of_terms
+      ),
+      evaluate_selection_predictions(
+        method = model_name,
+        sample_name = "Validation (2024-2025)",
+        observed = selection_test_data$mortality_30d,
+        predicted_probability = predict(
+          model, newdata = selection_test_data, type = "response"
+        ),
+        number_of_selected_predictors = number_of_terms
+      )
+    )
+  }
+))
+
+# Paired DeLong test of the validation AUC against the stepwise model.
+reference_validation_roc <- pROC::roc(
+  response = selection_test_data$mortality_30d,
+  predictor = predict(
+    stepwise_refit_model, newdata = selection_test_data, type = "response"
+  ),
+  levels = c(0, 1), direction = "<", quiet = TRUE
+)
+interaction_auc_p_values <- vapply(
+  names(all_interaction_models),
+  function(model_name) {
+    if (identical(model_name, "Stepwise model (no interaction)")) {
+      return("")
+    }
+    comparison_roc <- pROC::roc(
+      response = selection_test_data$mortality_30d,
+      predictor = predict(
+        all_interaction_models[[model_name]],
+        newdata = selection_test_data, type = "response"
+      ),
+      levels = c(0, 1), direction = "<", quiet = TRUE
+    )
+    format.pval(
+      pROC::roc.test(
+        reference_validation_roc, comparison_roc, method = "delong"
+      )$p.value,
+      digits = 3, eps = 0.001
+    )
+  },
+  character(1)
+)
+interaction_performance_table$`DeLong p vs stepwise (validation)` <- ifelse(
+  grepl("^Validation", interaction_performance_table$Sample),
+  interaction_auc_p_values[interaction_performance_table$Method],
+  ""
+)
+
+interaction_performance_table[performance_columns] <- lapply(
+  interaction_performance_table[performance_columns],
+  round,
+  digits = 3
+)
+
+knitr::kable(
+  interaction_performance_table,
+  align = c("l", "l", rep("r", 8)),
+  caption = "Training and validation performance of the stepwise-AIC model with and without interaction"
+)
+```
+
+## Coefficients of the interaction models
+
+```{r interaction-coefficient-tables, echo=FALSE, results='asis'}
+for (model_name in names(interaction_models)) {
+  cat("\n\n### ", model_name, "\n\n", sep = "")
+  print(knitr::kable(
+    logistic_coefficient_table(interaction_models[[model_name]]),
+    align = c("l", rep("r", 6)),
+    caption = paste("Logistic regression:", model_name)
+  ))
+}
+```
+
 # Models restricted to significant predictors
 
 The refitted models above can retain predictors whose coefficients are not
@@ -1604,9 +1787,7 @@ highest likelihood-ratio p value (`drop1`, chi-squared test, evaluated per
 variable so that all categories of a factor are kept or removed together) is
 removed, the model is refitted, and the process is repeated until every
 remaining predictor has p < 0.05. Each anatomical region is therefore kept
-with all its severity categories (1-2, 3-4, 5-6) if at least one of them is
-significant, so individual categories of a retained variable can still have
-p >= 0.05. The 2024-2025 validation sample is not used.
+as a Yes/No variable (AIS >= 4 vs <= 3) if it is significant. The 2024-2025 validation sample is not used.
 
 ```{r significant-only-models}
 significance_threshold <- 0.05

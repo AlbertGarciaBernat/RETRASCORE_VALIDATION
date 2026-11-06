@@ -1,0 +1,885 @@
+---
+title: "RETRASCORE - Árboles de decisión y puntos de corte de AIS por región anatómica"
+subtitle: "Exploración con retrauci_abril_2026.csv y mortalidad a 30 días"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    number_sections: true
+    self_contained: true
+date: "`r format(Sys.Date(), '%Y-%m-%d')`"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE,
+                      fig.width = 9, fig.height = 6, dpi = 110)
+try(Sys.setlocale("LC_CTYPE", "English_United States.utf8"), silent = TRUE)
+
+required_packages <- c("dplyr", "lubridate", "ggplot2", "knitr",
+                       "rpart", "partykit", "pROC")
+missing_packages <- required_packages[
+  !vapply(required_packages, requireNamespace, logical(1), quietly = TRUE)
+]
+if (length(missing_packages) > 0L) {
+  stop(
+    "Instale los siguientes paquetes antes de generar el informe: ",
+    paste(missing_packages, collapse = ", ")
+  )
+}
+
+library(dplyr)
+library(lubridate)
+library(ggplot2)
+library(rpart)
+library(partykit)
+library(pROC)
+```
+
+# Objetivo
+
+Explorar si los **árboles de decisión** permiten encontrar **puntos de corte de
+la gravedad AIS** que se asocien con la **mortalidad a 30 días**, **región
+anatómica por región anatómica**. Para cada una de las 9 regiones AIS se usa
+como predictor el **AIS máximo del paciente en esa región** (0 = sin lesión
+registrada, 1-6 = gravedad AIS) y se buscan los cortes de tres maneras:
+
+1. **Youden**: el corte que maximiza sensibilidad + especificidad - 1.
+2. **Árbol de clasificación (`rpart`, criterio de Gini)** con una sola partición.
+3. **Árbol de inferencia condicional (`ctree`)** con una sola partición; usa
+   tests de permutación y corrige por comparaciones múltiples.
+
+Después se comprueba la **estabilidad** de cada corte con *bootstrap*, se repite
+el análisis en pacientes con **lesión aislada** en la región (para que el corte
+no esté contaminado por lesiones en otras regiones) y se ajusta un **árbol
+multivariante** con las 9 regiones a la vez, validado en una muestra de test.
+
+Los cortes que se obtienen aquí son **exploratorios**: se buscan y se evalúan
+en los mismos datos (salvo el bloque de train/test), así que el rendimiento de
+un corte "óptimo" es optimista. La tabla de estabilidad por *bootstrap* sirve
+precisamente para ver cuánto depende la elección de la muestra.
+
+# Parámetros
+
+```{r parametros}
+input_candidates <- c("../retrauci_abril_2026.csv", "retrauci_abril_2026.csv")
+input_file <- input_candidates[file.exists(input_candidates)][1]
+output_dir <- "outputs_arboles_regiones_ais"
+
+year_range <- c(2015L, 2025L)   # año del trauma
+minimum_age <- 18               # se eliminan los menores de 18 años
+number_of_lesions <- 32L
+severe_threshold <- 3           # corte convencional de referencia: AIS >= 3
+
+min_bucket_univariate <- 30L    # pacientes mínimos a cada lado de un corte
+min_bucket_isolated <- 20L      # idem en el análisis de lesión aislada
+min_bucket_tree <- 50L          # pacientes mínimos por hoja (árbol multivariante)
+max_depth_tree <- 4L            # profundidad máxima del árbol multivariante
+n_bootstrap <- 1000L            # réplicas bootstrap para la estabilidad
+test_fraction <- 0.30           # fracción de test en el árbol multivariante
+exclude_without_lesions <- TRUE # excluir pacientes sin ninguna lesión válida
+seed <- 20261106L
+
+region_names <- c(
+  "Craneo", "Cara", "Cuello", "Torax", "Abdomen",
+  "Columna vertebral", "Extremidades superiores",
+  "Extremidades inferiores", "Piel y partes blandas"
+)
+# Nombres sintácticos para usar como variables en los modelos.
+region_vars <- c("Craneo", "Cara", "Cuello", "Torax", "Abdomen",
+                 "Columna", "Ext_sup", "Ext_inf", "Piel")
+
+if (is.na(input_file)) {
+  stop("No se encuentra retrauci_abril_2026.csv ni en la carpeta del ",
+       "documento ni en la carpeta superior.")
+}
+dir.create(output_dir, showWarnings = FALSE)
+set.seed(seed)
+```
+
+# Lectura y preparación de datos
+
+```{r lectura}
+# Todo se lee como texto para no alterar identificadores ni códigos.
+raw_data <- read.csv2(
+  input_file,
+  stringsAsFactors = FALSE,
+  colClasses = "character",
+  na.strings = NULL
+)
+
+clean_text <- function(x) {
+  x <- tolower(trimws(as.character(x)))
+  x[x %in% c("", "na", "nas")] <- NA_character_
+  x
+}
+
+clean_number <- function(x) {
+  x <- trimws(as.character(x))
+  x[x %in% c("", "NA", "NAS")] <- NA_character_
+  suppressWarnings(as.numeric(gsub(",", ".", x)))
+}
+
+parse_dates <- function(x) {
+  x <- trimws(as.character(x))
+  x[x %in% c("", "NA", "NAS")] <- NA_character_
+  suppressWarnings(
+    parse_date_time(x, orders = c("dmy", "ymd", "dmy HMS", "ymd HMS"))
+  )
+}
+
+trauma_date <- parse_dates(raw_data$fecha_trauma)
+icu_discharge_date <- parse_dates(raw_data$fecha_alta_uci)
+hospital_discharge_date <- parse_dates(raw_data$fecha_alta_hospital)
+death_recorded_date <- parse_dates(raw_data$fecha_exitus)
+```
+
+## Mortalidad a 30 días
+
+Misma definición que en `heatmap_lesiones_ais.Rmd`: mortalidad intrahospitalaria
+a partir de `evolucion_uci` y `evolucion_hospitalaria`; vale 1 si el paciente
+fallece en los 30 días siguientes al trauma y 0 si sobrevive al alta o fallece
+después del día 30. Los fallecidos sin fecha válida quedan con desenlace
+desconocido y se excluyen.
+
+```{r mortalidad-30d}
+death_labels <- c("exitus", "exitus y donacion")
+icu_outcome <- clean_text(raw_data$evolucion_uci)
+hospital_outcome <- clean_text(raw_data$evolucion_hospitalaria)
+
+in_hospital_mortality <- case_when(
+  icu_outcome %in% death_labels ~ 1L,
+  hospital_outcome %in% death_labels ~ 1L,
+  hospital_outcome == "alta" ~ 0L,
+  TRUE ~ NA_integer_
+)
+
+icu_death <- icu_outcome %in% death_labels
+hospital_death <- hospital_outcome %in% death_labels
+
+death_date <- as.POSIXct(
+  rep(NA_real_, nrow(raw_data)),
+  origin = "1970-01-01", tz = "UTC"
+)
+death_date[icu_death] <- icu_discharge_date[icu_death]
+death_date[hospital_death] <- hospital_discharge_date[hospital_death]
+
+use_recorded_date <- in_hospital_mortality == 1 & is.na(death_date) &
+  !is.na(death_recorded_date)
+use_recorded_date[is.na(use_recorded_date)] <- FALSE
+death_date[use_recorded_date] <- death_recorded_date[use_recorded_date]
+
+days_to_death <- as.numeric(
+  difftime(death_date, trauma_date, units = "days")
+)
+valid_death_date <- !is.na(days_to_death) & days_to_death >= 0
+
+mortality_30d <- case_when(
+  in_hospital_mortality == 0 ~ 0L,
+  in_hospital_mortality == 1 & valid_death_date & days_to_death <= 30 ~ 1L,
+  in_hospital_mortality == 1 & valid_death_date & days_to_death > 30 ~ 0L,
+  TRUE ~ NA_integer_
+)
+```
+
+## Regiones AIS y AIS máximo por región
+
+El archivo de abril tiene muchas lesiones con nombre pero **sin región AIS**
+informada. Igual que en `completar_regiones_ais.Rmd`, la región vacía se
+completa con el texto del nombre de la lesión anterior a la primera `/`; los
+valores ya informados se respetan siempre que sean regiones válidas (1-9).
+Las lesiones sin gravedad AIS válida (1-6) no se pueden usar y se ignoran.
+
+```{r regiones-ais}
+region_map <- c(
+  "craneo" = 1, "cara" = 2, "cuello" = 3, "torax" = 4, "abdomen" = 5,
+  "columna vertebral" = 6, "extremidades superiores" = 7,
+  "extemidades inferiores" = 8,  # grafía tal como aparece en el archivo
+  "extremidades inferiores" = 8, "piel y partes blandas" = 9
+)
+
+region_from_text <- function(lesion_name) {
+  lesion_name <- clean_text(lesion_name)
+  region_text <- trimws(sub("/.*$", "", lesion_name))
+  unname(region_map[region_text])
+}
+
+name_cols <- paste0("lesion_", 0:(number_of_lesions - 1L), "_nombre")
+region_cols <- paste0("lesion_", 0:(number_of_lesions - 1L), "_region_ais")
+severity_cols <- paste0("lesion_", 0:(number_of_lesions - 1L), "_gravedad")
+stopifnot(all(c(name_cols, region_cols, severity_cols) %in% names(raw_data)))
+
+# Selección de pacientes (primero filtramos y luego construimos la matriz).
+trauma_year <- year(trauma_date)
+age_all <- clean_number(raw_data$edad)
+
+in_period <- !is.na(trauma_year) &
+  trauma_year >= year_range[1] & trauma_year <= year_range[2]
+is_minor <- !is.na(age_all) & age_all < minimum_age
+known_outcome <- !is.na(mortality_30d)
+keep <- in_period & !is_minor & known_outcome
+
+cohort <- raw_data[keep, , drop = FALSE]
+died <- mortality_30d[keep]
+age <- age_all[keep]
+
+lesion_region_given <- sapply(cohort[region_cols], clean_number)
+lesion_region_text <- sapply(cohort[name_cols], region_from_text)
+lesion_severity <- sapply(cohort[severity_cols], clean_number)
+lesion_severity[!(lesion_severity %in% 1:6)] <- NA_real_
+
+given_valid <- lesion_region_given %in% 1:9
+lesion_region <- ifelse(given_valid, lesion_region_given, lesion_region_text)
+lesion_region[!(lesion_region %in% 1:9)] <- NA_real_
+dim(lesion_region) <- dim(lesion_severity)
+
+has_name <- sapply(cohort[name_cols], function(x) !is.na(clean_text(x)))
+region_filled <- !given_valid & !is.na(lesion_region_text)
+dim(region_filled) <- dim(lesion_severity)
+
+usable_lesion <- !is.na(lesion_region) & !is.na(lesion_severity)
+
+max_ais_by_region <- sapply(1:9, function(region_code) {
+  severity <- ifelse(lesion_region == region_code, lesion_severity, NA_real_)
+  result <- suppressWarnings(apply(severity, 1, max, na.rm = TRUE))
+  result[is.infinite(result)] <- 0
+  result
+})
+colnames(max_ais_by_region) <- region_vars
+
+n_valid_lesions <- rowSums(usable_lesion)
+has_lesions <- n_valid_lesions > 0
+
+selection_flow <- data.frame(
+  Paso = c(
+    "Registros iniciales",
+    paste0("Año del trauma ", year_range[1], "-", year_range[2]),
+    paste0("Menores de ", minimum_age, " años eliminados"),
+    "Mortalidad a 30 días desconocida (eliminados)",
+    "Pacientes tras los filtros",
+    "Pacientes sin ninguna lesión con región y gravedad válidas",
+    "Pacientes analizados"
+  ),
+  n = c(
+    nrow(raw_data),
+    sum(in_period),
+    sum(in_period & is_minor),
+    sum(in_period & !is_minor & !known_outcome),
+    nrow(cohort),
+    sum(!has_lesions),
+    if (exclude_without_lesions) sum(has_lesions) else nrow(cohort)
+  )
+)
+knitr::kable(selection_flow, align = c("l", "r"))
+
+region_summary <- data.frame(
+  Concepto = c("Lesiones con nombre (cohorte)",
+               "Región AIS informada y válida",
+               "Región completada desde el nombre de la lesión",
+               "Lesiones sin gravedad AIS válida (ignoradas)",
+               "Lesiones usables (región y gravedad válidas)"),
+  n = c(sum(has_name), sum(given_valid & has_name),
+        sum(region_filled & has_name),
+        sum(has_name & is.na(lesion_severity)),
+        sum(usable_lesion))
+)
+knitr::kable(region_summary, align = c("l", "r"))
+
+if (exclude_without_lesions) {
+  max_ais_by_region <- max_ais_by_region[has_lesions, , drop = FALSE]
+  died <- died[has_lesions]
+  age <- age[has_lesions]
+}
+
+ais_df <- as.data.frame(max_ais_by_region)
+ais_df[] <- lapply(ais_df, as.integer)
+N <- nrow(ais_df)
+cat("\nPacientes analizados:", N, "| fallecidos a 30 días:", sum(died),
+    "(", round(100 * mean(died), 1), "%)\n")
+```
+
+# Mortalidad según el AIS máximo de cada región
+
+Antes de buscar cortes conviene ver la forma de la relación: mortalidad a 30
+días para cada nivel de AIS máximo y región (con intervalo de confianza de
+Wilson).
+
+```{r mortalidad-por-nivel}
+level_table <- do.call(rbind, lapply(seq_along(region_vars), function(i) {
+  x <- ais_df[[region_vars[i]]]
+  do.call(rbind, lapply(0:6, function(level) {
+    n <- sum(x == level)
+    d <- sum(died[x == level])
+    ci <- if (n > 0) suppressWarnings(prop.test(d, n)$conf.int) else c(NA, NA)
+    data.frame(Region = region_names[i], AIS = level, n = n, muertes = d,
+               mortalidad = ifelse(n > 0, 100 * d / n, NA_real_),
+               ic_inf = 100 * ci[1], ic_sup = 100 * ci[2])
+  }))
+}))
+level_table$Region <- factor(level_table$Region, levels = region_names)
+
+wide_mort <- reshape(
+  transform(level_table,
+            celda = ifelse(n > 0, sprintf("%.1f%% (n=%d)", mortalidad, n), "-"))[
+              c("Region", "AIS", "celda")],
+  idvar = "Region", timevar = "AIS", direction = "wide"
+)
+names(wide_mort) <- c("Región", paste0("AIS ", 0:6))
+knitr::kable(wide_mort, row.names = FALSE, align = c("l", rep("r", 7)),
+             caption = "Mortalidad a 30 días (n) por AIS máximo y región")
+write.csv2(level_table, file.path(output_dir, "mortalidad_por_nivel_ais.csv"),
+           row.names = FALSE)
+```
+
+```{r grafico-mortalidad-nivel, fig.height=7.5}
+ggplot(subset(level_table, n >= 5),
+       aes(x = AIS, y = mortalidad)) +
+  geom_hline(yintercept = 0, colour = "grey85") +
+  geom_errorbar(aes(ymin = ic_inf, ymax = ic_sup), width = 0.15,
+                colour = "grey55") +
+  geom_line(colour = "#b2182b", linewidth = 0.5) +
+  geom_point(aes(size = n), colour = "#b2182b") +
+  scale_x_continuous(breaks = 0:6) +
+  scale_size_area(max_size = 5) +
+  facet_wrap(~Region, ncol = 3, scales = "free_y") +
+  labs(x = "AIS máximo en la región", y = "Mortalidad a 30 días (%)",
+       size = "Pacientes",
+       title = "Mortalidad a 30 días según el AIS máximo de cada región",
+       subtitle = "Solo niveles con al menos 5 pacientes") +
+  theme_minimal(base_size = 11)
+ggsave(file.path(output_dir, "mortalidad_por_nivel_ais.png"),
+       width = 10, height = 7.5, dpi = 150)
+```
+
+# Puntos de corte por región (todos los pacientes)
+
+## Funciones de búsqueda de cortes
+
+El predictor es un entero 0-6, de modo que un corte `k` significa
+**AIS >= k** frente a **AIS < k** (k = 1, ..., 6). Para cada corte se calculan
+mortalidad a cada lado, sensibilidad, especificidad, índice de Youden, odds
+ratio y p-valor de chi-cuadrado. Solo se admiten cortes con al menos
+`min_bucket` pacientes en cada lado.
+
+```{r funciones-cortes}
+# Tabla de cortes a partir de los conteos por nivel AIS (0..6).
+cut_table_counts <- function(n_all, d_all, min_bucket) {
+  N_tot <- sum(n_all)
+  D_tot <- sum(d_all)
+  S_tot <- N_tot - D_tot
+  n_ge <- rev(cumsum(rev(n_all)))   # n_ge[k + 1] = pacientes con AIS >= k
+  d_ge <- rev(cumsum(rev(d_all)))
+  cuts <- 1:6
+  n_hi <- n_ge[cuts + 1]
+  d_hi <- d_ge[cuts + 1]
+  n_lo <- N_tot - n_hi
+  d_lo <- D_tot - d_hi
+  s_hi <- n_hi - d_hi
+  s_lo <- n_lo - d_lo
+  sens <- d_hi / D_tot
+  spec <- s_lo / S_tot
+  valid <- n_hi >= min_bucket & n_lo >= min_bucket
+  data.frame(
+    corte = cuts, n_bajo = n_lo, n_alto = n_hi,
+    mort_bajo = 100 * d_lo / pmax(n_lo, 1), mort_alto = 100 * d_hi / pmax(n_hi, 1),
+    sens = sens, spec = spec, youden = ifelse(valid, sens + spec - 1, NA_real_),
+    d_hi = d_hi, d_lo = d_lo, s_hi = s_hi, s_lo = s_lo, valido = valid
+  )
+}
+
+best_cut_youden <- function(n_all, d_all, min_bucket) {
+  tab <- cut_table_counts(n_all, d_all, min_bucket)
+  if (all(is.na(tab$youden))) return(NA_integer_)
+  tab$corte[which.max(tab$youden)]
+}
+
+odds_ratio <- function(d_hi, s_hi, d_lo, s_lo) {
+  cells <- c(d_hi, s_hi, d_lo, s_lo)
+  if (any(cells == 0)) cells <- cells + 0.5   # corrección de Haldane
+  (cells[1] * cells[4]) / (cells[2] * cells[3])
+}
+
+chisq_p <- function(d_hi, s_hi, d_lo, s_lo) {
+  m <- matrix(c(d_hi, s_hi, d_lo, s_lo), 2, byrow = TRUE)
+  if (any(rowSums(m) == 0) || any(colSums(m) == 0)) return(NA_real_)
+  suppressWarnings(chisq.test(m, correct = FALSE)$p.value)
+}
+
+# Corte de un árbol rpart con una sola partición (criterio de Gini).
+# cp = -1 obliga a rpart a dividir aunque la partición no cambie la clase
+# predicha (con predictor ordinal y mortalidad baja, cp = 0 deja solo la raíz).
+rpart_cut <- function(x, y, min_bucket) {
+  df <- data.frame(x = x, y = factor(y, levels = c(0, 1)))
+  fit <- rpart(y ~ x, data = df, method = "class",
+               control = rpart.control(maxdepth = 1L, cp = -1, xval = 0,
+                                       minbucket = min_bucket,
+                                       maxcompete = 0L, maxsurrogate = 0L))
+  if (nrow(fit$frame) < 3L) return(NA_integer_)
+  as.integer(ceiling(fit$splits[1, "index"]))
+}
+
+# Corte de un árbol de inferencia condicional con una sola partición.
+ctree_cut <- function(x, y, min_bucket) {
+  df <- data.frame(x = as.numeric(x), y = factor(y, levels = c(0, 1)))
+  ct <- ctree(y ~ x, data = df,
+              control = ctree_control(maxdepth = 1L, minbucket = min_bucket,
+                                      alpha = 0.05, testtype = "Bonferroni"))
+  if (width(ct) < 2L) return(c(corte = NA_real_, p = NA_real_))
+  node <- node_party(ct)
+  c(corte = floor(breaks_split(split_node(node))) + 1,
+    p = as.numeric(info_node(node)$p.value))
+}
+
+# Bootstrap: frecuencia con la que cada corte es el elegido por Youden.
+bootstrap_cut <- function(x, y, min_bucket, B) {
+  N_x <- length(x)
+  picks <- integer(B)
+  for (b in seq_len(B)) {
+    idx <- sample.int(N_x, replace = TRUE)
+    xb <- x[idx]
+    yb <- y[idx]
+    picks[b] <- best_cut_youden(tabulate(xb + 1L, nbins = 7L),
+                                tabulate(xb[yb == 1L] + 1L, nbins = 7L),
+                                min_bucket)
+  }
+  freq <- tabulate(picks[!is.na(picks)], nbins = 6L) / B
+  names(freq) <- paste0("AIS>=", 1:6)
+  freq
+}
+
+analyse_region <- function(x, y, min_bucket, B) {
+  n_all <- tabulate(x + 1L, nbins = 7L)
+  d_all <- tabulate(x[y == 1L] + 1L, nbins = 7L)
+  tab <- cut_table_counts(n_all, d_all, min_bucket)
+  tab$or <- mapply(odds_ratio, tab$d_hi, tab$s_hi, tab$d_lo, tab$s_lo)
+  tab$p <- mapply(chisq_p, tab$d_hi, tab$s_hi, tab$d_lo, tab$s_lo)
+  list(
+    table = tab,
+    youden = best_cut_youden(n_all, d_all, min_bucket),
+    rpart = rpart_cut(x, y, min_bucket),
+    ctree = ctree_cut(x, y, min_bucket),
+    boot = if (B > 0) bootstrap_cut(x, y, min_bucket, B) else rep(NA_real_, 6)
+  )
+}
+
+auc_value <- function(x, y) {
+  if (length(unique(y)) < 2L || length(unique(x)) < 2L) return(NA_real_)
+  as.numeric(auc(roc(y, x, quiet = TRUE, direction = "<")))
+}
+```
+
+## Resultados por región
+
+```{r cortes-por-region}
+results_all <- lapply(region_vars, function(v) {
+  analyse_region(ais_df[[v]], died, min_bucket_univariate, n_bootstrap)
+})
+names(results_all) <- region_names
+
+format_p <- function(p) {
+  ifelse(is.na(p), NA_character_, ifelse(p < 0.001, "<0.001", sprintf("%.3f", p)))
+}
+
+# Si el mejor corte tiene Youden <= 0, ningún corte identifica un grupo de
+# mayor mortalidad y no se propone corte (se devuelve NA).
+summary_cuts <- function(results, data_list, region_labels) {
+  do.call(rbind, lapply(seq_along(results), function(i) {
+    r <- results[[i]]
+    x <- data_list[[i]]$x
+    y <- data_list[[i]]$y
+    tab <- r$table
+    k <- r$youden
+    if (!is.na(k) && tab$youden[tab$corte == k] <= 0) k <- NA_integer_
+    row_k <- if (is.na(k)) NULL else tab[tab$corte == k, ]
+    k_ct <- unname(r$ctree["corte"])
+    row_ct <- if (is.na(k_ct) || !(k_ct %in% 1:6)) NULL else tab[tab$corte == k_ct, ]
+    row_ref <- tab[tab$corte == severe_threshold, ]
+    data.frame(
+      Region = region_labels[i],
+      n = length(x), muertes = sum(y),
+      mortalidad_global = round(100 * mean(y), 1),
+      AUC_AIS_continuo = round(auc_value(x, y), 3),
+      corte_Youden = ifelse(is.na(k), NA, k),
+      estabilidad_Youden = ifelse(is.na(k), NA, round(100 * r$boot[k], 1)),
+      n_alto = if (is.null(row_k)) NA else row_k$n_alto,
+      mort_bajo = if (is.null(row_k)) NA else round(row_k$mort_bajo, 1),
+      mort_alto = if (is.null(row_k)) NA else round(row_k$mort_alto, 1),
+      sens = if (is.null(row_k)) NA else round(100 * row_k$sens, 1),
+      spec = if (is.null(row_k)) NA else round(100 * row_k$spec, 1),
+      youden = if (is.null(row_k)) NA else round(row_k$youden, 3),
+      OR = if (is.null(row_k)) NA else round(row_k$or, 1),
+      youden_corte3 = if (nrow(row_ref) == 0 || is.na(row_ref$youden)) NA
+                      else round(row_ref$youden, 3),
+      corte_rpart = r$rpart,
+      corte_ctree = k_ct,
+      p_ctree = format_p(unname(r$ctree["p"])),
+      mort_bajo_ctree = if (is.null(row_ct)) NA else round(row_ct$mort_bajo, 1),
+      mort_alto_ctree = if (is.null(row_ct)) NA else round(row_ct$mort_alto, 1),
+      stringsAsFactors = FALSE
+    )
+  }))
+}
+
+cuts_col_names <- c(
+  "Región", "n", "Muertes", "Mort. global %", "AUC (AIS continuo)",
+  "Corte Youden", "Estabilidad Youden %", "n con AIS >= corte",
+  "Mort. < corte %", "Mort. >= corte %", "Sens %", "Espec %", "Youden", "OR",
+  "Youden con AIS>=3", "Corte rpart", "Corte ctree", "p ctree",
+  "Mort. < corte ctree %", "Mort. >= corte ctree %"
+)
+
+data_all <- lapply(region_vars, function(v) list(x = ais_df[[v]], y = died))
+cuts_all <- summary_cuts(results_all, data_all, region_names)
+
+knitr::kable(
+  cuts_all,
+  col.names = cuts_col_names,
+  caption = paste0(
+    "Cortes de AIS máximo por región (pacientes con AIS 0 incluidos). ",
+    "'Corte k' significa AIS >= k. La estabilidad es el % de réplicas ",
+    "bootstrap en que Youden elige ese mismo corte. Corte Youden vacío: ",
+    "ningún corte identifica un grupo con mayor mortalidad (Youden <= 0). ",
+    "rpart y ctree buscan la mejor partición sin exigir que la mortalidad ",
+    "sea mayor por encima del corte: compare las dos últimas columnas.")
+)
+write.csv2(cuts_all, file.path(output_dir, "cortes_por_region_todos.csv"),
+           row.names = FALSE)
+```
+
+## Estabilidad del corte por bootstrap
+
+```{r estabilidad, fig.height=7.5}
+stability_all <- do.call(rbind, lapply(seq_along(results_all), function(i) {
+  data.frame(Region = region_names[i], corte = 1:6,
+             frecuencia = 100 * results_all[[i]]$boot)
+}))
+stability_all$Region <- factor(stability_all$Region, levels = region_names)
+
+stab_wide <- reshape(stability_all, idvar = "Region", timevar = "corte",
+                     direction = "wide")
+names(stab_wide) <- c("Región", paste0("AIS>=", 1:6))
+knitr::kable(stab_wide, digits = 1, row.names = FALSE,
+             caption = "% de réplicas bootstrap en que Youden elige cada corte")
+write.csv2(stability_all, file.path(output_dir, "estabilidad_bootstrap_todos.csv"),
+           row.names = FALSE)
+
+ggplot(stability_all, aes(x = factor(corte), y = frecuencia)) +
+  geom_col(fill = "#2166ac") +
+  facet_wrap(~Region, ncol = 3) +
+  labs(x = "Corte (AIS >= k)", y = "% de réplicas bootstrap",
+       title = "Estabilidad del corte elegido por Youden",
+       subtitle = paste0(n_bootstrap, " réplicas bootstrap por región")) +
+  theme_minimal(base_size = 11)
+ggsave(file.path(output_dir, "estabilidad_bootstrap_todos.png"),
+       width = 10, height = 7.5, dpi = 150)
+```
+
+## Curva de Youden por corte
+
+```{r youden-curvas, fig.height=7.5}
+youden_curves <- do.call(rbind, lapply(seq_along(results_all), function(i) {
+  tab <- results_all[[i]]$table
+  data.frame(Region = region_names[i], corte = tab$corte, youden = tab$youden)
+}))
+youden_curves$Region <- factor(youden_curves$Region, levels = region_names)
+
+ggplot(youden_curves, aes(x = corte, y = youden)) +
+  geom_line(colour = "grey40", na.rm = TRUE) +
+  geom_point(colour = "#b2182b", size = 2, na.rm = TRUE) +
+  geom_vline(xintercept = severe_threshold, linetype = "dashed",
+             colour = "grey60") +
+  scale_x_continuous(breaks = 1:6) +
+  facet_wrap(~Region, ncol = 3) +
+  labs(x = "Corte (AIS >= k)", y = "Índice de Youden",
+       title = "Índice de Youden de cada corte por región",
+       subtitle = "Línea discontinua: corte convencional AIS >= 3") +
+  theme_minimal(base_size = 11)
+ggsave(file.path(output_dir, "youden_por_corte.png"),
+       width = 10, height = 7.5, dpi = 150)
+```
+
+# Puntos de corte con lesión aislada en la región
+
+Los cortes de la sección anterior pueden estar influidos por lesiones graves
+en **otras regiones** (por ejemplo, un AIS 3 de extremidad inferior en un
+politraumatizado con TCE grave). Aquí se repite el análisis solo con pacientes
+que tienen **lesión en esa región (AIS >= 1) y ninguna lesión grave
+(AIS >= `r severe_threshold`) en las demás regiones**, de modo que el corte
+refleje el efecto propio de la región.
+
+```{r cortes-aislados}
+results_isolated <- vector("list", length(region_vars))
+data_isolated <- vector("list", length(region_vars))
+for (i in seq_along(region_vars)) {
+  others <- setdiff(region_vars, region_vars[i])
+  other_max <- apply(as.matrix(ais_df[others]), 1, max)
+  isolated <- ais_df[[region_vars[i]]] >= 1L & other_max < severe_threshold
+  x <- ais_df[[region_vars[i]]][isolated]
+  y <- died[isolated]
+  data_isolated[[i]] <- list(x = x, y = y)
+  results_isolated[[i]] <- if (length(unique(y)) < 2L) {
+    NULL
+  } else {
+    analyse_region(x, y, min_bucket_isolated, n_bootstrap)
+  }
+}
+names(results_isolated) <- region_names
+
+ok <- !vapply(results_isolated, is.null, logical(1))
+cuts_isolated <- summary_cuts(results_isolated[ok], data_isolated[ok],
+                              region_names[ok])
+cuts_isolated$youden_corte3 <- NULL
+
+knitr::kable(
+  cuts_isolated,
+  col.names = cuts_col_names[cuts_col_names != "Youden con AIS>=3"],
+  caption = paste0(
+    "Cortes de AIS máximo por región en pacientes con lesión aislada ",
+    "(AIS >= 1 en la región y AIS < ", severe_threshold,
+    " en las demás). Mínimo ", min_bucket_isolated,
+    " pacientes a cada lado del corte.")
+)
+write.csv2(cuts_isolated, file.path(output_dir, "cortes_por_region_aislados.csv"),
+           row.names = FALSE)
+
+if (any(!ok)) {
+  cat("Regiones sin pacientes suficientes para este análisis:",
+      paste(region_names[!ok], collapse = ", "), "\n")
+}
+```
+
+# Árbol multivariante con las 9 regiones
+
+Ahora las 9 regiones entran **a la vez** en un mismo árbol. Así se obtiene
+una jerarquía de cortes: qué región se examina primero, con qué AIS, y cómo
+cambia la mortalidad en cada rama. Se usa una muestra de **entrenamiento**
+(`r round(100 * (1 - test_fraction))`%) para ajustar el árbol y una muestra de
+**test** (`r round(100 * test_fraction)`%), estratificada por desenlace, para
+medir cuánto discrimina fuera de la muestra en la que se construyó.
+
+```{r split}
+tree_data <- ais_df
+tree_data$died <- factor(died, levels = c(0, 1))
+
+test_idx <- unlist(lapply(split(seq_len(N), died), function(idx) {
+  sample(idx, size = round(test_fraction * length(idx)))
+}))
+train <- tree_data[-test_idx, ]
+test <- tree_data[test_idx, ]
+cat("Entrenamiento:", nrow(train), "pacientes,", sum(train$died == 1),
+    "fallecidos | Test:", nrow(test), "pacientes,", sum(test$died == 1),
+    "fallecidos\n")
+```
+
+## Árbol de inferencia condicional (`ctree`)
+
+```{r ctree-multivariante, fig.width=14, fig.height=8}
+ct <- ctree(died ~ ., data = train,
+            control = ctree_control(alpha = 0.01, testtype = "Bonferroni",
+                                    minbucket = min_bucket_tree,
+                                    maxdepth = max_depth_tree))
+print(ct)
+
+png(file.path(output_dir, "ctree_9_regiones.png"), width = 1800, height = 1100,
+    res = 130)
+plot(ct, main = "ctree: mortalidad a 30 días según AIS máximo por región")
+dev.off()
+plot(ct, main = "ctree: mortalidad a 30 días según AIS máximo por región")
+```
+
+```{r ctree-cortes}
+ct_splits <- function(ct_fit) {
+  out <- list()
+  walk <- function(node) {
+    if (is.terminal(node)) return(invisible())
+    sp <- split_node(node)
+    out[[length(out) + 1L]] <<- data.frame(
+      nodo = id_node(node),
+      region = names(ct_fit$data)[varid_split(sp)],
+      corte = paste0("AIS >= ", floor(breaks_split(sp)) + 1)
+    )
+    for (kid in kids_node(node)) walk(kid)
+  }
+  walk(node_party(ct_fit))
+  do.call(rbind, out)
+}
+
+ct_cut_table <- ct_splits(ct)
+knitr::kable(ct_cut_table, row.names = FALSE,
+             caption = "Particiones del ctree (nodo, región y corte)")
+
+leaf_table <- function(fit, data) {
+  node <- predict(fit, newdata = data, type = "node")
+  agg <- data.frame(nodo = as.integer(names(table(node))),
+                    n = as.integer(table(node)))
+  agg$muertes <- as.integer(tapply(as.integer(as.character(data$died)),
+                                   node, sum))
+  agg$mortalidad <- round(100 * agg$muertes / agg$n, 1)
+  agg[order(agg$mortalidad), ]
+}
+ct_leaves <- leaf_table(ct, train)
+knitr::kable(ct_leaves, row.names = FALSE,
+             caption = "Hojas del ctree (muestra de entrenamiento)")
+write.csv2(ct_cut_table, file.path(output_dir, "ctree_cortes.csv"),
+           row.names = FALSE)
+write.csv2(ct_leaves, file.path(output_dir, "ctree_hojas.csv"), row.names = FALSE)
+```
+
+## Árbol de clasificación (`rpart`) podado
+
+El árbol completo se poda con la regla de **1 error estándar** sobre la
+validación cruzada interna de 10 pliegues.
+
+```{r rpart-multivariante, fig.width=14, fig.height=8}
+set.seed(seed)
+rp_full <- rpart(died ~ ., data = train, method = "class",
+                 control = rpart.control(cp = 0.0005, minbucket = min_bucket_tree,
+                                         xval = 10L, maxcompete = 0L,
+                                         maxsurrogate = 0L))
+cp_tab <- rp_full$cptable
+best_row <- which.min(cp_tab[, "xerror"])
+threshold <- cp_tab[best_row, "xerror"] + cp_tab[best_row, "xstd"]
+cp_1se <- cp_tab[which(cp_tab[, "xerror"] <= threshold)[1], "CP"]
+rp <- prune(rp_full, cp = cp_1se)
+
+cat("CP elegido (regla 1-SE):", signif(cp_1se, 3), "\n\n")
+print(rp)
+
+rp_vars <- as.character(rp$frame$var)
+rp_split_rows <- rp_vars != "<leaf>"
+rp_cut_table <- data.frame(
+  nodo = as.integer(rownames(rp$frame))[rp_split_rows],
+  region = rp_vars[rp_split_rows],
+  corte = paste0("AIS >= ", ceiling(rp$splits[, "index"]))
+)
+knitr::kable(rp_cut_table, row.names = FALSE,
+             caption = "Particiones del rpart podado (nodo, región y corte)")
+write.csv2(rp_cut_table, file.path(output_dir, "rpart_cortes.csv"),
+           row.names = FALSE)
+
+rp_party <- as.party(rp)
+png(file.path(output_dir, "rpart_9_regiones.png"), width = 1800, height = 1100,
+    res = 130)
+plot(rp_party, main = "rpart podado: mortalidad a 30 días según AIS máximo por región")
+dev.off()
+plot(rp_party, main = "rpart podado: mortalidad a 30 días según AIS máximo por región")
+```
+
+## Rendimiento en la muestra de test
+
+Se compara el rendimiento de los árboles con dos regresiones logísticas de
+referencia: una con el AIS máximo de cada región como variable continua y otra
+con el indicador convencional AIS >= `r severe_threshold` por región. La
+comparación indica cuánta información se pierde (o se gana) al resumir cada
+región con unos pocos cortes.
+
+```{r rendimiento-test}
+prob_1 <- function(p) if (is.matrix(p)) p[, "1"] else as.numeric(p)
+
+dich <- function(d) {
+  out <- as.data.frame(lapply(d[region_vars],
+                              function(v) as.integer(v >= severe_threshold)))
+  out$died <- d$died
+  out
+}
+
+fit_glm_cont <- glm(died ~ ., data = train, family = binomial)
+fit_glm_dich <- glm(died ~ ., data = dich(train), family = binomial)
+
+models <- list(
+  "ctree (9 regiones)" = prob_1(predict(ct, newdata = test, type = "prob")),
+  "rpart podado (9 regiones)" = prob_1(predict(rp, newdata = test, type = "prob")),
+  "Logistica, AIS continuo" = as.numeric(predict(fit_glm_cont, newdata = test,
+                                                 type = "response")),
+  "Logistica, AIS >= 3 por region" = as.numeric(
+    predict(fit_glm_dich, newdata = dich(test), type = "response"))
+)
+
+test_y <- as.integer(as.character(test$died))
+auc_table <- do.call(rbind, lapply(names(models), function(nm) {
+  r <- roc(test_y, models[[nm]], quiet = TRUE, direction = "<")
+  ci <- ci.auc(r, method = "delong")
+  data.frame(Modelo = nm, AUC = round(as.numeric(r$auc), 3),
+             IC95_inf = round(ci[1], 3), IC95_sup = round(ci[3], 3))
+}))
+knitr::kable(auc_table, row.names = FALSE,
+             caption = "AUC en la muestra de test (IC 95% de DeLong)")
+write.csv2(auc_table, file.path(output_dir, "auc_test_modelos.csv"),
+           row.names = FALSE)
+```
+
+# Árbol con la edad como variable adicional
+
+La edad es uno de los predictores más fuertes de mortalidad en trauma, y puede
+desplazar a las regiones anatómicas en la jerarquía del árbol. Este ctree
+añade la edad a las 9 regiones para ver qué cortes de región sobreviven.
+
+```{r ctree-edad, fig.width=14, fig.height=8}
+tree_data_age <- tree_data
+tree_data_age$edad <- age
+train_age <- tree_data_age[-test_idx, ]
+test_age <- tree_data_age[test_idx, ]
+
+ct_age <- ctree(died ~ ., data = train_age,
+                control = ctree_control(alpha = 0.01, testtype = "Bonferroni",
+                                        minbucket = min_bucket_tree,
+                                        maxdepth = max_depth_tree))
+print(ct_age)
+
+png(file.path(output_dir, "ctree_9_regiones_edad.png"), width = 1800,
+    height = 1100, res = 130)
+plot(ct_age, main = "ctree: 9 regiones AIS + edad")
+dev.off()
+plot(ct_age, main = "ctree: 9 regiones AIS + edad")
+
+ct_age_cuts <- ct_splits(ct_age)
+ct_age_cuts$corte <- ifelse(ct_age_cuts$region == "edad",
+                            sub("AIS >= ", "edad >= ", ct_age_cuts$corte),
+                            ct_age_cuts$corte)
+knitr::kable(ct_age_cuts, row.names = FALSE,
+             caption = "Particiones del ctree con edad")
+
+fit_glm_age <- glm(died ~ ., data = train_age, family = binomial)
+age_models <- list(
+  "ctree (9 regiones + edad)" = prob_1(predict(ct_age, newdata = test_age,
+                                               type = "prob")),
+  "Logistica, AIS continuo + edad" = as.numeric(
+    predict(fit_glm_age, newdata = test_age, type = "response"))
+)
+auc_age <- do.call(rbind, lapply(names(age_models), function(nm) {
+  r <- roc(test_y[!is.na(test_age$edad)],
+           age_models[[nm]][!is.na(test_age$edad)], quiet = TRUE,
+           direction = "<")
+  ci <- ci.auc(r, method = "delong")
+  data.frame(Modelo = nm, AUC = round(as.numeric(r$auc), 3),
+             IC95_inf = round(ci[1], 3), IC95_sup = round(ci[3], 3))
+}))
+knitr::kable(auc_age, row.names = FALSE,
+             caption = "AUC en test con la edad como variable adicional")
+write.csv2(rbind(auc_table, auc_age),
+           file.path(output_dir, "auc_test_modelos.csv"), row.names = FALSE)
+```
+
+# Cómo leer estos resultados
+
+- Un **corte "AIS >= k"** es una simplificación: la mortalidad de cada región
+  suele crecer de forma gradual con el AIS, así que un corte único pierde
+  información. Compare siempre el AUC del AIS continuo con el del corte.
+- La **estabilidad bootstrap** indica si el corte es una propiedad de la región
+  o un artefacto de la muestra: si dos cortes se reparten las réplicas, ambos
+  son igual de defendibles y conviene elegir el de mayor sentido clínico.
+- Los cortes de la sección de **lesión aislada** son los más fáciles de
+  interpretar como efecto propio de la región; los del **árbol multivariante**
+  dependen de qué otras regiones están afectadas.
+- Con AIS entero (0-6) solo hay 6 cortes posibles por región, de modo que los
+  tres métodos suelen coincidir; las diferencias aparecen sobre todo en el
+  árbol multivariante y en el criterio de significación de `ctree`.
+- Estos cortes son **exploratorios**. Para proponer puntos de corte definitivos
+  habría que validarlos en una cohorte externa (por ejemplo, otro periodo o
+  centro) y comprobar la calibración, no solo la discriminación.
+- Se excluyen las lesiones sin gravedad AIS válida y, por defecto, los pacientes
+  sin ninguna lesión usable; ambos criterios se pueden cambiar en los
+  parámetros.
+
+```{r sesion}
+sessionInfo()
+```

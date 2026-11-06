@@ -1,0 +1,1770 @@
+---
+title: "RETRAUCI - Ultimate validation: preprocessing"
+output: html_document
+date: "2026-10-27"
+---
+
+```{r}
+library(dplyr)
+library(lubridate)
+```
+
+```{r}
+raw_data <- read.csv2(
+  "../retrauci_abril_2026.csv",
+  stringsAsFactors = TRUE
+)
+
+#summary(raw_data)
+```
+
+```{r}
+# ============================================================
+# TABLE OF EMPTY CELLS, LITERAL "NAS" VALUES, AND VALID VALUES
+# FOR ALL VARIABLES
+# ============================================================
+
+missingness_summary <- do.call(
+  rbind,
+  lapply(names(raw_data), function(variable) {
+
+    # Temporarily convert to text without modifying the original data frame
+    x <- trimws(as.character(raw_data[[variable]]))
+
+    total_n <- length(x)
+
+    # Empty Excel cells are usually imported as NA.
+    # This also includes empty strings or values containing only spaces.
+    is_empty <- is.na(x) | (!is.na(x) & x == "")
+
+    # Literal "NAS" text, case-insensitive
+    is_literal_nas <- !is.na(x) & toupper(x) == "NAS"
+
+    # Values that are neither empty nor "NAS"
+    is_valid <- !is_empty & !is_literal_nas
+
+    data.frame(
+      variable = variable,
+
+      n_empty = sum(is_empty),
+      pct_empty = round(
+        100 * sum(is_empty) / total_n,
+        2
+      ),
+
+      n_literal_nas = sum(is_literal_nas),
+      pct_literal_nas = round(
+        100 * sum(is_literal_nas) / total_n,
+        2
+      ),
+
+      n_empty_or_nas = sum(is_empty | is_literal_nas),
+      pct_empty_or_nas = round(
+        100 * sum(is_empty | is_literal_nas) / total_n,
+        2
+      ),
+
+      stringsAsFactors = FALSE
+    )
+  })
+)
+
+# Remove row names
+rownames(missingness_summary) <- NULL
+
+# Sort from highest to lowest percentage of empty cells plus NAS values
+missingness_summary <- missingness_summary[
+  order(
+    -missingness_summary$pct_empty_or_nas,
+    missingness_summary$variable
+  ),
+]
+
+# Open the complete table in RStudio
+View(missingness_summary)
+
+```
+
+# 1. Convert dates/times
+```{r, echo=FALSE}
+
+# Identify and report date/time values that cannot be parsed, then convert valid entries to standardized POSIXct format.
+# Empty values are treated as missing (NA), while invalid formats are flagged before conversion.
+# Format: POSIXct (date format)
+
+date_vars <- intersect(c(
+  "fecha_trauma", "fecha_ingreso_hospital", "fecha_ingreso_uci",
+  "fecha_alta_uci", "fecha_alta_hospital", "fecha_exitus",
+  "fecha_reingreso_uci", "fecha_alta_reingreso"
+), names(raw_data))
+
+time_vars <- intersect(c(
+  "hora_trauma", "hora_ingreso_hospital",
+  "hora_ingreso_uci", "hora_exitus"
+), names(raw_data))
+
+parse_columns <- function(data, vars, orders) {
+  original <- data[vars]
+
+  parsed <- lapply(original, function(x) {
+    x <- trimws(as.character(x))
+    x[x == ""] <- NA
+    suppressWarnings(parse_date_time(x, orders = orders))
+  })
+
+  problems <- sapply(seq_along(vars), function(i) {
+    x <- trimws(as.character(original[[i]]))
+    sum(is.na(parsed[[i]]) & !is.na(x) & x != "")
+  })
+
+  names(problems) <- vars
+
+  list(
+    data = parsed,
+    problems = problems[problems > 0]
+  )
+}
+
+dates <- parse_columns(
+  raw_data,
+  date_vars,
+  c("dmy", "ymd", "dmy HMS", "ymd HMS")
+)
+
+times <- parse_columns(
+  raw_data,
+  time_vars,
+  c("HMS", "HM", "H M", "I M p")
+)
+
+raw_data[date_vars] <- dates$data
+raw_data[time_vars] <- times$data
+
+dates$problems
+times$problems
+```
+
+# 2. Convert numeric variables
+```{r, echo=FALSE}
+
+# Clean and convert numeric variables to numeric format by trimming spaces, standardizing decimal separators, and setting invalid values to NA.
+numeric_vars <- c(
+  "edad",
+  "creatinina_inicial", "creatinina_24h",
+  "hemoglobina_inicial", "hemoglobina_24h",
+  "hematocrito_inicial", "hematocrito_24h",
+  "inr_inicial", "inr_24h",
+  "protrombina_inicial", "protrombina_24h",
+  "ttpa_inicial", "ttpa_24h",
+  "fibrinogeno_inicial", "fibrinogeno_24h",
+  "ph_inicial", "ph_24h",
+  "exceso_base_inicial", "exceso_base_24h",
+  "lactico_inicial", "lactico_24h",
+  "etanol_cuantitativo_sangre",
+  "fr_ph",
+  "pto_fr", "pto_tas", "pto_gcs",
+  "rts_t", "rts", "ps",
+  "dias_uci", "dias_hospital",
+  "rscore_edad", "rscore_pupilas",
+  "retrascore"
+)
+
+regional_severity_vars <- grep("^lesion_\\d+_gravedad$", names(raw_data), value = TRUE)
+
+numeric_vars <- intersect(
+  unique(c(numeric_vars, regional_severity_vars)),
+  names(raw_data)
+)
+
+numeric_vars <- numeric_vars[
+  !vapply(raw_data[numeric_vars], is.numeric, logical(1))
+]
+
+numeric_problems <- sapply(raw_data[numeric_vars], function(x) {
+  x2 <- trimws(as.character(x))
+  x2 <- gsub(",", ".", x2)
+
+  sum(
+    is.na(suppressWarnings(as.numeric(x2))) &
+      x2 != "" &
+      !is.na(x2)
+  )
+})
+
+numeric_problems[numeric_problems > 0]
+
+raw_data[numeric_vars] <- lapply(raw_data[numeric_vars], function(x) {
+  x <- trimws(as.character(x))
+  x[x == ""] <- NA
+  x <- gsub(",", ".", x)
+
+  suppressWarnings(as.numeric(x))
+})
+```
+
+# 3. Candidate cohort based on the RETRASCORE paper
+
+The cohort is constructed before the subsequent exclusions based on `edad` and
+`sdmo`. Following the paper, the only exclusion criterion applied here is an
+unavailable in-hospital mortality outcome. Missing predictor values are retained
+so they can be described and a complete-case analysis or imputation can be
+chosen later.
+
+Operationalization decisions:
+
+- ATLS-based management is a feature of the registry protocol, and no
+  patient-level variable is available for use as a filter.
+- In-hospital mortality combines `evolucion_uci` and
+  `evolucion_hospitalaria`, because patients who die in the ICU generally do
+  not have the hospital outcome field completed.
+- The analytical outcome is `mortality_30d`: deaths within 30 days of trauma
+  are coded as 1; live hospital discharges and deaths after day 30 are coded
+  as 0. Deceased patients without a valid date retain an unknown outcome.
+- `triss_death_probability` is calculated as `1 - ps/100`, because `ps` is
+  stored as a survival percentage ranging from 0 to 100.
+- Medical prehospital care is defined as `uvi movil` or `helicoptero`; the
+  categories `no medicalizada`, `sin atencion prehospitalaria`, and
+  `soporte vital enfermeria` form the reference group.
+- Hemodynamic failure is approximated by `shock` or `shock refractario` in
+  `situacion_hemodinamica`; respiratory failure is defined as PaO2/FiO2 less
+  than or equal to 200 in `adrs`.
+- `situacion_hemodinamica`, `adrs`, `coagulopatia`, `vmec_dico`, and
+  `hemorragia_masiva` are assumed to represent the first 24 hours, as defined
+  in the registry. The export has no timestamp that allows this to be verified
+  for each patient.
+- mais1-mais6 are used directly according to the current code mapping. In these
+  fields, 0, an empty cell, NA, na, or NAS all mean that no lesion is present
+  in that anatomical region and are therefore coded as 0.
+
+```{r}
+# Helper functions ---------------------------------------------------------
+
+clean_text <- function(x) {
+  x <- tolower(trimws(as.character(x)))
+  x[x %in% c("", "na", "nas")] <- NA_character_
+  x
+}
+
+clean_number <- function(x) {
+  x <- trimws(as.character(x))
+  x[x %in% c("", "NA", "NAS")] <- NA_character_
+  suppressWarnings(as.numeric(gsub(",", ".", x)))
+}
+
+# In-hospital outcome. Patients who die in the ICU generally have an empty
+# hospital outcome, so both outcome fields are combined.
+clean_icu_outcome <- clean_text(raw_data$evolucion_uci)
+clean_hospital_outcome <- clean_text(raw_data$evolucion_hospitalaria)
+
+in_hospital_mortality <- case_when(
+  clean_icu_outcome %in% c("exitus", "exitus y donacion") ~ 1L,
+  clean_hospital_outcome %in% c(
+    "exitus", "exitus y donacion"
+  ) ~ 1L,
+  clean_hospital_outcome == "alta" ~ 0L,
+  TRUE ~ NA_integer_
+)
+
+# Primary outcome from the paper: mortality within 30 days of trauma.
+# fecha_alta_uci is used for ICU deaths and fecha_alta_hospital for deaths
+# after ICU discharge. fecha_exitus is used as a fallback.
+icu_death <- clean_icu_outcome %in% c(
+  "exitus", "exitus y donacion"
+)
+hospital_death <- clean_hospital_outcome %in% c(
+  "exitus", "exitus y donacion"
+)
+
+death_date <- as.POSIXct(
+  rep(NA_real_, nrow(raw_data)),
+  origin = "1970-01-01",
+  tz = "UTC"
+)
+death_date[icu_death] <- raw_data$fecha_alta_uci[icu_death]
+death_date[hospital_death] <- raw_data$fecha_alta_hospital[
+  hospital_death
+]
+
+use_recorded_death_date <- in_hospital_mortality == 1 &
+  is.na(death_date) & !is.na(raw_data$fecha_exitus)
+use_recorded_death_date[is.na(use_recorded_death_date)] <- FALSE
+death_date[use_recorded_death_date] <- raw_data$fecha_exitus[use_recorded_death_date]
+
+days_to_death <- as.numeric(
+  difftime(death_date, raw_data$fecha_trauma, units = "days")
+)
+valid_death_date <- !is.na(days_to_death) & days_to_death >= 0
+
+# Survival beyond day 30 is considered 30-day survival even if the patient
+# dies later; these later deaths are not excluded.
+mortality_30d <- case_when(
+  in_hospital_mortality == 0 ~ 0L,
+  in_hospital_mortality == 1 &
+    valid_death_date & days_to_death <= 30 ~ 1L,
+  in_hospital_mortality == 1 &
+    valid_death_date & days_to_death > 30 ~ 0L,
+  TRUE ~ NA_integer_
+)
+
+# Comparators used in the paper.
+icu_length_of_stay_days <- clean_number(raw_data$dias_uci)
+triss_survival_pct <- clean_number(raw_data$ps)
+triss_death_probability <- ifelse(
+  !is.na(triss_survival_pct) & triss_survival_pct >= 0 & triss_survival_pct <= 100,
+  1 - triss_survival_pct / 100,
+  NA_real_
+)
+
+# Patient-related variables -----------------------------------------------
+
+clean_sex <- clean_text(raw_data$genero)
+male <- case_when(
+  clean_sex == "masculino" ~ 1L,
+  clean_sex == "femenino" ~ 0L,
+  TRUE ~ NA_integer_
+)
+
+age <- clean_number(raw_data$edad)
+age_category <- cut(
+  age,
+  breaks = c(-Inf, 49, 65, 75, Inf),
+  labels = c("<50", "50-65", "66-75", ">75"),
+  right = TRUE
+)
+
+clean_antiplatelet <- clean_text(raw_data$antiagregado)
+clean_vka <- clean_text(raw_data$dicumarinicos)
+clean_doac <- clean_text(raw_data$acod)
+
+preinjury_antithrombotic <- case_when(
+  clean_antiplatelet == "si" |
+    clean_vka == "si" |
+    clean_doac == "si" ~ 1L,
+  clean_antiplatelet == "no" &
+    clean_vka == "no" &
+    clean_doac == "no" ~ 0L,
+  TRUE ~ NA_integer_
+)
+
+# Prehospital variables ----------------------------------------------------
+
+clean_prehospital_care <- clean_text(raw_data$atencion_prehospitalaria)
+physician_prehospital_care <- case_when(
+  clean_prehospital_care %in% c("uvi movil", "helicoptero") ~ 1L,
+  clean_prehospital_care %in% c(
+    "no medicalizada", "sin atencion prehospitalaria",
+    "soporte vital enfermeria"
+  ) ~ 0L,
+  TRUE ~ NA_integer_
+)
+
+clean_prehospital_intubation <- clean_text(raw_data$iot_prehospitalaria)
+prehospital_intubation <- case_when(
+  clean_prehospital_intubation %in% c(
+    "si", "si, con empleo de dispositivos de apoyo"
+  ) ~ 1L,
+  clean_prehospital_intubation == "no" ~ 0L,
+  TRUE ~ NA_integer_
+)
+
+clean_trauma_type <- clean_text(raw_data$tipo_trauma)
+penetrating_trauma <- case_when(
+  clean_trauma_type == "penetrante" ~ 1L,
+  clean_trauma_type == "contuso" ~ 0L,
+  TRUE ~ NA_integer_
+)
+
+clean_mechanism <- clean_text(raw_data$mecanismo)
+# Requested grouping: other and unknown form a single category.
+# Empty values remain NA and are not included in this category.
+clean_mechanism[clean_mechanism %in% c(
+  "otro", "otros", "desconocido"
+)] <- "otros/desconocido"
+clean_intent <- clean_text(raw_data$intencionalidad)
+
+injury_type <- factor(
+  case_when(
+    clean_intent == "no intencional : trafico" ~
+      "Road Traffic accident",
+    clean_intent == "no intencional : caida" ~ "Fall",
+    clean_intent == "no intencional : laboral" ~
+      "Occupational accident",
+    clean_intent == "no intencional : deportivo" ~
+      "Sport related",
+    clean_intent == "intencionado : agresion" ~ "Assault",
+    clean_intent == "intencionado : autolisis" ~ "Self-injury",
+    clean_intent == "desconocido" ~ "Unknown",
+    clean_intent == "no intencional : otras actividades" ~
+      "Other",
+    TRUE ~ NA_character_
+  ),
+  levels = c(
+    "Road Traffic accident", "Fall", "Occupational accident",
+    "Sport related", "Assault", "Self-injury", "Unknown", "Other"
+  )
+)
+
+high_risk_mechanism <- case_when(
+  clean_mechanism %in% c(
+    "arma de fuego", "atropello", "caida accidental", "otros/desconocido"
+  ) ~ 1L,
+  clean_mechanism == "precipitacion" &
+    clean_intent == "intencionado : autolisis" ~ 1L,
+  !is.na(clean_mechanism) & clean_mechanism != "precipitacion" ~ 0L,
+  clean_mechanism == "precipitacion" &
+    !is.na(clean_intent) ~ 0L,
+  TRUE ~ NA_integer_
+)
+
+# Physiological variables --------------------------------------------------
+
+clean_pupils <- clean_text(raw_data$pupilas_ingreso)
+pupil_category <- factor(
+  case_when(
+    clean_pupils == "sin alteraciones" ~ "normal",
+    clean_pupils == "midriasis unilateral" ~ "midriasis unilateral",
+    clean_pupils == "midriasis bilatera" ~ "midriasis bilateral",
+    TRUE ~ NA_character_
+  ),
+  levels = c("normal", "midriasis unilateral", "midriasis bilateral")
+)
+
+gcs_total <- clean_number(raw_data$gcs_total_introducido)
+gcs_le_8 <- ifelse(
+  is.na(gcs_total), NA_integer_, as.integer(gcs_total <= 8)
+)
+
+# Anatomical variables -----------------------------------------------------
+# RETRAUCI regional MAIS variables are used directly:
+# mais1 head, mais2 upper extremity, mais3 thorax, mais4 abdomen,
+# mais5 lower extremity (including pelvis; see the pelvis split below), and
+# mais6 external/thermal injuries.
+# In this export, 0, an empty MAIS cell, NA, na, and NAS all mean that no injury
+# is present in that region and are coded as 0. Other non-numeric values or
+# values outside the AIS 0-6 range are retained as missing.
+
+convert_regional_mais <- function(x) {
+  text_value <- trimws(as.character(x))
+  is_empty <- is.na(text_value) | text_value == "" |
+    toupper(text_value) %in% c("NA", "NAS")
+  result <- suppressWarnings(as.numeric(gsub(",", ".", text_value)))
+  result[is_empty] <- 0
+  result[!is.na(result) & !(result %in% 0:6)] <- NA_real_
+  result
+}
+
+dichotomize_mais <- function(x) {
+  ifelse(is.na(x), NA_integer_, as.integer(x >= 3))
+}
+
+# Severity of each anatomical region as a Yes/No variable: "Yes" when the
+# regional AIS is 4 or higher, "No" when it is 3 or lower (including 0 = no
+# injury in the region). "No" is the reference category.
+categorize_mais <- function(x) {
+  factor(
+    case_when(
+      is.na(x) ~ NA_character_,
+      x >= 4 ~ "Yes",
+      x <= 3 ~ "No"
+    ),
+    levels = c("No", "Yes")
+  )
+}
+
+# Regional AIS values -------------------------------------------------------
+
+head_ais <- convert_regional_mais(raw_data$mais1)
+upper_extremity_ais <- convert_regional_mais(raw_data$mais2)
+thorax_ais <- convert_regional_mais(raw_data$mais3)
+abdomen_ais <- convert_regional_mais(raw_data$mais4)
+lower_extremity_incl_pelvis_ais <- convert_regional_mais(raw_data$mais5)
+external_ais <- convert_regional_mais(raw_data$mais6)
+
+# Pelvis and lower extremity are analysed separately. In the AIS 2005 coding
+# used by the registry, region 8 (lower extremity) includes the pelvis. Pelvic
+# lesions are those whose AIS code (lesion_X_ais) starts with 8561 (pelvic ring)
+# or 8562 (acetabulum). The text in lesion_X_nombre is a generic menu label and
+# is NOT used to identify the pelvis.
+# - pelvis_ais: maximum AIS severity among pelvic lesions (0 if none).
+# - lower_extremity_ais: maximum AIS severity among the remaining region-8
+#   lesions (pelvis excluded).
+# Patients with no region-8 lesion detail in lesion_X_* cannot be split, so for
+# them the total lower-extremity MAIS (mais5) is kept as lower extremity and
+# pelvis_ais is 0. Their number is reported in the summary table below.
+lesion_indices <- 0:31
+lesion_region_columns <- paste0("lesion_", lesion_indices, "_region_ais")
+lesion_severity_columns <- paste0("lesion_", lesion_indices, "_gravedad")
+lesion_code_columns <- paste0("lesion_", lesion_indices, "_ais")
+
+missing_lesion_columns <- setdiff(
+  c(lesion_region_columns, lesion_severity_columns, lesion_code_columns),
+  names(raw_data)
+)
+if (length(missing_lesion_columns) > 0L) {
+  stop(
+    "Missing lesion columns: ",
+    paste(missing_lesion_columns, collapse = ", ")
+  )
+}
+
+lesion_region <- sapply(raw_data[lesion_region_columns], clean_number)
+lesion_severity <- sapply(raw_data[lesion_severity_columns], clean_number)
+lesion_code_prefix <- sapply(
+  raw_data[lesion_code_columns],
+  function(x) substr(trimws(as.character(x)), 1, 4)
+)
+lesion_severity[!(lesion_severity %in% 1:6)] <- NA_real_
+
+is_lower_limb_lesion <- lesion_region == 8
+is_lower_limb_lesion[is.na(is_lower_limb_lesion)] <- FALSE
+is_pelvic_lesion <- is_lower_limb_lesion &
+  matrix(
+    lesion_code_prefix %in% c("8561", "8562"),
+    nrow = nrow(lesion_code_prefix)
+  )
+is_nonpelvic_lower_limb_lesion <- is_lower_limb_lesion & !is_pelvic_lesion
+
+max_lesion_severity <- function(selected_lesions) {
+  severity <- ifelse(selected_lesions, lesion_severity, 0)
+  result <- apply(severity, 1, max, na.rm = TRUE)
+  # A selected lesion without a valid severity leaves the maximum unknown.
+  result[rowSums(selected_lesions & is.na(lesion_severity)) > 0] <- NA_real_
+  result
+}
+
+has_lower_limb_detail <- rowSums(is_lower_limb_lesion) > 0
+pelvis_ais <- max_lesion_severity(is_pelvic_lesion)
+lower_extremity_ais <- ifelse(
+  has_lower_limb_detail,
+  max_lesion_severity(is_nonpelvic_lower_limb_lesion),
+  lower_extremity_incl_pelvis_ais
+)
+
+# Organ failures within the first 24 hours --------------------------------
+
+clean_hemodynamic_status <- clean_text(raw_data$situacion_hemodinamica)
+hemodynamic_failure <- case_when(
+  clean_hemodynamic_status %in% c("shock", "shock refractario") ~ 1L,
+  clean_hemodynamic_status %in% c(
+    "estable", "inestable remonta con volumen"
+  ) ~ 0L,
+  TRUE ~ NA_integer_
+)
+
+clean_respiratory_status <- clean_text(raw_data$adrs)
+respiratory_failure <- case_when(
+  clean_respiratory_status %in% c("<100", "101-200") ~ 1L,
+  clean_respiratory_status %in% c("no", "201 -300", "> 300") ~ 0L,
+  TRUE ~ NA_integer_
+)
+
+clean_coagulopathy <- clean_text(raw_data$coagulopatia)
+coagulopathy_24h <- case_when(
+  clean_coagulopathy == "si" ~ 1L,
+  clean_coagulopathy == "no" ~ 0L,
+  TRUE ~ NA_integer_
+)
+
+# Treatments within the first 24 hours ------------------------------------
+
+clean_mechanical_ventilation <- clean_text(raw_data$vmec_dico)
+mechanical_ventilation <- case_when(
+  clean_mechanical_ventilation == "si" ~ 1L,
+  clean_mechanical_ventilation == "no" ~ 0L,
+  TRUE ~ NA_integer_
+)
+
+clean_massive_hemorrhage <- clean_text(raw_data$hemorragia_masiva)
+massive_hemorrhage <- case_when(
+  clean_massive_hemorrhage == "si" ~ 1L,
+  clean_massive_hemorrhage == "no" ~ 0L,
+  TRUE ~ NA_integer_
+)
+
+# Final cohort -------------------------------------------------------------
+
+retrascore_cohort <- data.frame(
+  row_id = seq_len(nrow(raw_data)),
+  medical_record = raw_data$historia,
+  registry_record = raw_data$registro,
+  hospital = raw_data$hospital,
+  trauma_year = year(raw_data$fecha_trauma),
+  in_hospital_mortality = in_hospital_mortality,
+  mortality_30d = mortality_30d,
+  days_to_death = days_to_death,
+  icu_length_of_stay_days = icu_length_of_stay_days,
+  triss_death_probability = triss_death_probability,
+  male = male,
+  age = age,
+  age_category = age_category,
+  preinjury_antithrombotic = preinjury_antithrombotic,
+  physician_prehospital_care = physician_prehospital_care,
+  prehospital_intubation = prehospital_intubation,
+  penetrating_trauma = penetrating_trauma,
+  injury_type = injury_type,
+  grouped_mechanism = clean_mechanism,
+  high_risk_mechanism = high_risk_mechanism,
+  pupils = pupil_category,
+  gcs_total = gcs_total,
+  gcs_le_8 = gcs_le_8,
+  head_ais = head_ais,
+  head_mais = dichotomize_mais(head_ais),
+  head_mais_group = categorize_mais(head_ais),
+  thorax_ais = thorax_ais,
+  thorax_mais = dichotomize_mais(thorax_ais),
+  thorax_mais_group = categorize_mais(thorax_ais),
+  abdomen_ais = abdomen_ais,
+  abdomen_mais = dichotomize_mais(abdomen_ais),
+  abdomen_mais_group = categorize_mais(abdomen_ais),
+  upper_extremity_ais = upper_extremity_ais,
+  upper_extremity_mais = dichotomize_mais(upper_extremity_ais),
+  upper_extremity_mais_group = categorize_mais(upper_extremity_ais),
+  lower_extremity_incl_pelvis_ais = lower_extremity_incl_pelvis_ais,
+  lower_extremity_incl_pelvis_mais_group = categorize_mais(lower_extremity_incl_pelvis_ais),
+  lower_extremity_ais = lower_extremity_ais,
+  lower_extremity_mais = dichotomize_mais(lower_extremity_ais),
+  pelvis_ais = pelvis_ais,
+  pelvis_mais = dichotomize_mais(pelvis_ais),
+  external_ais = external_ais,
+  external_mais = dichotomize_mais(external_ais),
+  external_mais_group = categorize_mais(external_ais),
+  hemodynamic_failure = hemodynamic_failure,
+  respiratory_failure = respiratory_failure,
+  coagulopathy_24h = coagulopathy_24h,
+  mechanical_ventilation = mechanical_ventilation,
+  massive_hemorrhage = massive_hemorrhage
+)
+
+initial_n <- nrow(retrascore_cohort)
+unknown_outcome_n <- sum(
+  is.na(retrascore_cohort$in_hospital_mortality)
+)
+
+retrascore_cohort <- retrascore_cohort %>%
+  filter(!is.na(in_hospital_mortality))
+
+cohort_flow <- data.frame(
+  stage = c(
+    "Initial records",
+    "Excluded: unknown in-hospital mortality",
+    "RETRASCORE cohort"
+  ),
+  n = c(initial_n, unknown_outcome_n, nrow(retrascore_cohort))
+)
+
+cohort_flow
+table(retrascore_cohort$mortality_30d, useNA = "ifany")
+
+outcome_30d_summary <- data.frame(
+  measure = c(
+    "Eligible cohort",
+    "Evaluable 30-day outcome",
+    "Deaths within 30 days",
+    "In-hospital deaths after 30 days",
+    "Deaths without a valid date to determine 30-day status"
+  ),
+  n = c(
+    nrow(retrascore_cohort),
+    sum(!is.na(retrascore_cohort$mortality_30d)),
+    sum(retrascore_cohort$mortality_30d == 1, na.rm = TRUE),
+    sum(
+      retrascore_cohort$in_hospital_mortality == 1 &
+        retrascore_cohort$days_to_death > 30,
+      na.rm = TRUE
+    ),
+    sum(
+      retrascore_cohort$in_hospital_mortality == 1 &
+        is.na(retrascore_cohort$mortality_30d)
+    )
+  )
+)
+
+outcome_30d_summary
+
+# Availability of all candidate variables in the cohort.
+cohort_missingness_summary <- data.frame(
+  variable = names(retrascore_cohort),
+  n_missing = vapply(retrascore_cohort, function(x) {
+    sum(is.na(x))
+  }, numeric(1)),
+  pct_missing = round(vapply(retrascore_cohort, function(x) {
+    100 * mean(is.na(x))
+  }, numeric(1)), 2),
+  row.names = NULL
+)
+
+cohort_missingness_summary <- cohort_missingness_summary[
+  order(-cohort_missingness_summary$pct_missing),
+]
+cohort_missingness_summary
+```
+
+## Pelvis and lower extremity
+
+Pelvis (AIS codes 8561xx and 8562xx) and the rest of the lower extremity are
+coded separately; `lower_extremity_mais` no longer includes the pelvis. The
+table shows, for the final cohort, how many patients have a severe injury
+(AIS >= 3) in each group and how many patients lack lesion-level detail in
+region 8, for whom the pelvic and non-pelvic components cannot be separated.
+
+```{r pelvis-lower-extremity-summary, echo=FALSE}
+pelvis_split_summary <- data.frame(
+  Measure = c(
+    "Patients in the cohort",
+    "Total lower extremity incl. pelvis, MAIS >= 3 (mais5)",
+    "Pelvis (8561/8562), MAIS >= 3",
+    "Lower extremity excluding pelvis, MAIS >= 3",
+    "MAIS >= 3 in mais5 but no region-8 lesion detail (not splittable)"
+  ),
+  n = c(
+    nrow(retrascore_cohort),
+    sum(retrascore_cohort$lower_extremity_incl_pelvis_ais >= 3, na.rm = TRUE),
+    sum(retrascore_cohort$pelvis_mais == 1, na.rm = TRUE),
+    sum(retrascore_cohort$lower_extremity_mais == 1, na.rm = TRUE),
+    sum(
+      retrascore_cohort$lower_extremity_incl_pelvis_ais >= 3 &
+        !has_lower_limb_detail[retrascore_cohort$row_id],
+      na.rm = TRUE
+    )
+  )
+)
+knitr::kable(pelvis_split_summary, align = c("l", "r"))
+```
+
+# Preprocessed cohort
+
+The preprocessed data remain available in memory as the `retrascore_cohort`
+object. This document does not write an RDS file or any other data file.
+
+# Logistic regression with a temporal split
+
+The model uses the same 13 predictors included in the final logistic regression
+from the previous study. Complete cases are split temporally by year of trauma:
+patients injured in 2020-2023 form the training set and patients injured in
+2024-2025 form the validation set. The model is fitted only in the training
+set. Patients injured outside 2020-2025 (or without a valid trauma date) are
+not used.
+
+```{r logistic-regression}
+# Variables retained in the previous study.
+selected_predictors <- c(
+  "age_category",
+  "preinjury_antithrombotic",
+  "prehospital_intubation",
+  "high_risk_mechanism",
+  "pupils",
+  "gcs_le_8",
+  "head_mais",
+  "thorax_mais",
+  "hemodynamic_failure",
+  "respiratory_failure",
+  "coagulopathy_24h",
+  "mechanical_ventilation",
+  "massive_hemorrhage"
+)
+
+outcome_variable <- "mortality_30d"
+required_variables <- c(outcome_variable, selected_predictors)
+model_variables <- c("row_id", "trauma_year", required_variables)
+missing_variables <- setdiff(required_variables, names(retrascore_cohort))
+
+if (length(missing_variables) > 0L) {
+  stop(
+    "The following model variables are missing: ",
+    paste(missing_variables, collapse = ", ")
+  )
+}
+
+# Logistic regression uses complete cases for the outcome and all predictors.
+complete_case_rows <- complete.cases(
+  retrascore_cohort[, required_variables, drop = FALSE]
+)
+model_data <- droplevels(
+  retrascore_cohort[complete_case_rows, model_variables, drop = FALSE]
+)
+
+if (nrow(model_data) == 0L) {
+  stop("No complete cases are available for model fitting.")
+}
+if (!identical(sort(unique(model_data[[outcome_variable]])), c(0L, 1L))) {
+  stop("The model outcome must contain both 0 and 1.")
+}
+
+# Temporal split by year of trauma: train 2020-2023, validate 2024-2025.
+training_years <- 2020:2023
+validation_years <- 2024:2025
+
+training_data <- model_data[
+  model_data$trauma_year %in% training_years,
+  ,
+  drop = FALSE
+]
+test_data <- model_data[
+  model_data$trauma_year %in% validation_years,
+  ,
+  drop = FALSE
+]
+
+if (nrow(training_data) == 0L || nrow(test_data) == 0L) {
+  stop("The training or validation period contains no complete cases.")
+}
+for (split_data in list(training_data, test_data)) {
+  if (!identical(sort(unique(split_data[[outcome_variable]])), c(0L, 1L))) {
+    stop("Each temporal sample must contain both outcome classes.")
+  }
+}
+
+model_formula <- reformulate(
+  termlabels = selected_predictors,
+  response = outcome_variable
+)
+
+logistic_model <- glm(
+  formula = model_formula,
+  data = training_data,
+  family = binomial(link = "logit"),
+  na.action = na.fail
+)
+
+if (!isTRUE(logistic_model$converged)) {
+  stop("The logistic regression did not converge.")
+}
+if (anyNA(coef(logistic_model))) {
+  stop("The logistic regression contains non-estimable coefficients.")
+}
+```
+
+## Analysis sample
+
+```{r split-summary-table, echo=FALSE}
+split_summary_table <- data.frame(
+  Sample = c(
+    "Full preprocessed cohort",
+    "Complete cases (all years)",
+    "Training (2020-2023)",
+    "Validation (2024-2025)"
+  ),
+  N = c(
+    nrow(retrascore_cohort),
+    nrow(model_data),
+    nrow(training_data),
+    nrow(test_data)
+  ),
+  Deaths = c(
+    sum(retrascore_cohort$mortality_30d == 1, na.rm = TRUE),
+    sum(model_data$mortality_30d == 1),
+    sum(training_data$mortality_30d == 1),
+    sum(test_data$mortality_30d == 1)
+  ),
+  `Mortality (%)` = round(100 * c(
+    mean(retrascore_cohort$mortality_30d, na.rm = TRUE),
+    mean(model_data$mortality_30d),
+    mean(training_data$mortality_30d),
+    mean(test_data$mortality_30d)
+  ), 2),
+  check.names = FALSE
+)
+
+knitr::kable(
+  split_summary_table,
+  align = c("l", "r", "r", "r"),
+  caption = "Cohort and temporal split summary"
+)
+```
+
+## Logistic regression results
+
+Odds ratios and 95% confidence intervals are derived from the model fitted in
+the training set. Confidence intervals are Wald intervals.
+
+```{r logistic-regression-results, echo=FALSE}
+coefficient_matrix <- summary(logistic_model)$coefficients
+
+model_results_table <- data.frame(
+  Term = rownames(coefficient_matrix),
+  Estimate = coefficient_matrix[, "Estimate"],
+  `Standard error` = coefficient_matrix[, "Std. Error"],
+  `Odds ratio` = exp(coefficient_matrix[, "Estimate"]),
+  `95% CI lower` = exp(
+    coefficient_matrix[, "Estimate"] -
+      1.96 * coefficient_matrix[, "Std. Error"]
+  ),
+  `95% CI upper` = exp(
+    coefficient_matrix[, "Estimate"] +
+      1.96 * coefficient_matrix[, "Std. Error"]
+  ),
+  `P value` = coefficient_matrix[, "Pr(>|z|)"],
+  row.names = NULL,
+  check.names = FALSE
+)
+
+numeric_result_columns <- c(
+  "Estimate", "Standard error", "Odds ratio", "95% CI lower", "95% CI upper"
+)
+model_results_table[numeric_result_columns] <- lapply(
+  model_results_table[numeric_result_columns],
+  round,
+  digits = 3
+)
+model_results_table$`P value` <- format.pval(
+  model_results_table$`P value`,
+  digits = 3,
+  eps = 0.001
+)
+
+knitr::kable(
+  model_results_table,
+  align = c("l", rep("r", 6)),
+  caption = "Multivariable logistic regression in the 2020-2023 training set"
+)
+```
+
+## Model performance
+
+```{r model-performance-table, echo=FALSE}
+calculate_auc <- function(observed, predicted_probability) {
+  cases <- observed == 1
+  controls <- observed == 0
+  number_of_cases <- sum(cases)
+  number_of_controls <- sum(controls)
+
+  if (number_of_cases == 0L || number_of_controls == 0L) {
+    return(NA_real_)
+  }
+
+  probability_ranks <- rank(predicted_probability, ties.method = "average")
+  (sum(probability_ranks[cases]) -
+    number_of_cases * (number_of_cases + 1) / 2) /
+    (number_of_cases * number_of_controls)
+}
+
+evaluate_model <- function(data, sample_name) {
+  predicted_probability <- predict(
+    logistic_model,
+    newdata = data,
+    type = "response"
+  )
+
+  data.frame(
+    Sample = sample_name,
+    N = nrow(data),
+    Deaths = sum(data$mortality_30d),
+    `Observed mortality (%)` = 100 * mean(data$mortality_30d),
+    AUC = calculate_auc(data$mortality_30d, predicted_probability),
+    `Brier score` = mean(
+      (data$mortality_30d - predicted_probability)^2
+    ),
+    check.names = FALSE
+  )
+}
+
+model_performance_table <- rbind(
+  evaluate_model(training_data, "Training (2020-2023)"),
+  evaluate_model(test_data, "Validation (2024-2025)")
+)
+
+performance_columns <- c("Observed mortality (%)", "AUC", "Brier score")
+model_performance_table[performance_columns] <- lapply(
+  model_performance_table[performance_columns],
+  round,
+  digits = 3
+)
+
+knitr::kable(
+  model_performance_table,
+  align = c("l", "r", "r", "r", "r", "r"),
+  caption = "Model performance in the training (2020-2023) and validation (2024-2025) sets"
+)
+```
+
+# Data-driven variable selection
+
+The following analyses do not use the predictors retained by the previous
+study as prior information. The three methods (LASSO, elastic net and stepwise
+AIC) start from the same set of 17 eligible
+clinical candidate predictors. Anatomical injury severity enters through all
+six regions (head, upper extremity, thorax, abdomen, lower extremity including
+pelvis, and external), each as a Yes/No variable (regional AIS >= 4 = Yes,
+AIS <= 3 = No). A variable is selected when it is retained.
+Identifiers, year, other outcomes, variables
+measured after the outcome, and the TRISS prediction are excluded.
+
+Variable selection is performed exclusively in the 2020-2023 training period
+defined for the first logistic regression. Patients with complete data for all
+17 candidates are assigned to the training (2020-2023) or validation
+(2024-2025) period by year of trauma. The 2024-2025 validation sample is not
+used for variable selection or model estimation.
+
+```{r variable-selection-data}
+required_selection_packages <- c("glmnet", "MASS", "pROC")
+missing_selection_packages <- required_selection_packages[
+  !vapply(
+    required_selection_packages,
+    requireNamespace,
+    logical(1),
+    quietly = TRUE
+  )
+]
+
+if (length(missing_selection_packages) > 0L) {
+  stop(
+    "Install the following packages before running variable selection: ",
+    paste(missing_selection_packages, collapse = ", ")
+  )
+}
+
+# All eligible predictors are offered to both selection methods without
+# assigning priority to any variable.
+candidate_predictors <- c(
+  # Non-anatomical predictors of the original study
+  "age_category",
+  "preinjury_antithrombotic",
+  "prehospital_intubation",
+  "high_risk_mechanism",
+  "pupils",
+  "gcs_le_8",
+  "hemodynamic_failure",
+  "respiratory_failure",
+  "coagulopathy_24h",
+  "mechanical_ventilation",
+  "massive_hemorrhage",
+  # The six anatomical regions (mais1-mais6), each as Yes (AIS >= 4) / No
+  "head_mais_group",
+  "upper_extremity_mais_group",
+  "thorax_mais_group",
+  "abdomen_mais_group",
+  "lower_extremity_incl_pelvis_mais_group",
+  "external_mais_group"
+)
+
+selection_variables <- c(
+  "row_id", "trauma_year", outcome_variable, candidate_predictors
+)
+missing_candidate_variables <- setdiff(
+  selection_variables,
+  names(retrascore_cohort)
+)
+
+if (length(missing_candidate_variables) > 0L) {
+  stop(
+    "The following candidate variables are missing: ",
+    paste(missing_candidate_variables, collapse = ", ")
+  )
+}
+
+selection_complete_rows <- complete.cases(
+  retrascore_cohort[, selection_variables, drop = FALSE]
+)
+selection_data <- droplevels(
+  retrascore_cohort[
+    selection_complete_rows,
+    selection_variables,
+    drop = FALSE
+  ]
+)
+
+if (nrow(selection_data) == 0L) {
+  stop("No complete cases are available for variable selection.")
+}
+
+# Assign patients to the temporal training and validation periods.
+selection_training_data <- selection_data[
+  selection_data$trauma_year %in% training_years,
+  ,
+  drop = FALSE
+]
+selection_test_data <- selection_data[
+  selection_data$trauma_year %in% validation_years,
+  ,
+  drop = FALSE
+]
+
+if (nrow(selection_training_data) == 0L || nrow(selection_test_data) == 0L) {
+  stop("The training or validation period contains no selection cases.")
+}
+
+selection_formula <- reformulate(
+  termlabels = candidate_predictors,
+  response = outcome_variable
+)
+```
+
+## LASSO selection
+
+LASSO selection uses ten outcome-stratified cross-validation folds in the
+training sample. Predictors are standardized by `glmnet`, and the conservative
+`lambda.1se` value determines the selected model. A categorical predictor is
+considered selected when at least one of its indicator coefficients is nonzero.
+
+```{r lasso-selection}
+training_design_matrix_full <- model.matrix(
+  selection_formula,
+  data = selection_training_data
+)
+training_design_matrix <- training_design_matrix_full[, -1, drop = FALSE]
+training_outcome <- selection_training_data[[outcome_variable]]
+
+design_assignment <- attr(training_design_matrix_full, "assign")[-1]
+selection_term_labels <- attr(terms(selection_formula), "term.labels")
+
+set.seed(20261028)
+number_of_folds <- 10L
+fold_id <- integer(length(training_outcome))
+
+for (outcome_level in sort(unique(training_outcome))) {
+  level_indices <- which(training_outcome == outcome_level)
+  fold_id[level_indices] <- sample(rep(
+    seq_len(number_of_folds),
+    length.out = length(level_indices)
+  ))
+}
+
+lasso_cv_model <- glmnet::cv.glmnet(
+  x = training_design_matrix,
+  y = training_outcome,
+  family = "binomial",
+  alpha = 1,
+  foldid = fold_id,
+  type.measure = "deviance",
+  standardize = TRUE
+)
+
+lasso_coefficients <- as.numeric(
+  coef(lasso_cv_model, s = "lambda.1se")[-1, 1]
+)
+names(lasso_coefficients) <- colnames(training_design_matrix)
+
+lasso_term_strength <- vapply(
+  seq_along(selection_term_labels),
+  function(term_index) {
+    max(abs(lasso_coefficients[design_assignment == term_index]))
+  },
+  numeric(1)
+)
+names(lasso_term_strength) <- selection_term_labels
+
+lasso_selected_predictors <- names(lasso_term_strength)[
+  lasso_term_strength > 0
+]
+```
+
+## Elastic net selection
+
+Elastic net combines the L1 (LASSO) and L2 (ridge) penalties, which makes
+selection more stable when predictors are correlated (for example, the MAIS
+scores of several body regions). The mixing parameter `alpha` is tuned together
+with `lambda`: for each `alpha` in the grid below, `glmnet::cv.glmnet` is run
+with the same ten outcome-stratified folds used for LASSO, and the `alpha` with
+the lowest cross-validated deviance is retained (`alpha = 1` is the LASSO
+already fitted above, so the grid covers only 0.1-0.9). For the chosen `alpha`,
+the conservative `lambda.1se` value determines the selected model, as in LASSO.
+A categorical predictor is considered selected when at least one of its
+indicator coefficients is nonzero.
+
+```{r elastic-net-selection}
+elastic_net_alpha_grid <- seq(0.1, 0.9, by = 0.1)
+
+elastic_net_cv_models <- lapply(
+  elastic_net_alpha_grid,
+  function(alpha_value) {
+    glmnet::cv.glmnet(
+      x = training_design_matrix,
+      y = training_outcome,
+      family = "binomial",
+      alpha = alpha_value,
+      foldid = fold_id,
+      type.measure = "deviance",
+      standardize = TRUE
+    )
+  }
+)
+
+elastic_net_alpha_table <- data.frame(
+  Alpha = elastic_net_alpha_grid,
+  `Lambda (1se)` = vapply(
+    elastic_net_cv_models, function(m) m$lambda.1se, numeric(1)
+  ),
+  `Minimum CV deviance` = vapply(
+    elastic_net_cv_models, function(m) min(m$cvm), numeric(1)
+  ),
+  check.names = FALSE
+)
+
+best_alpha_index <- which.min(elastic_net_alpha_table$`Minimum CV deviance`)
+elastic_net_alpha <- elastic_net_alpha_grid[best_alpha_index]
+elastic_net_cv_model <- elastic_net_cv_models[[best_alpha_index]]
+
+elastic_net_coefficients <- as.numeric(
+  coef(elastic_net_cv_model, s = "lambda.1se")[-1, 1]
+)
+names(elastic_net_coefficients) <- colnames(training_design_matrix)
+
+elastic_net_term_strength <- vapply(
+  seq_along(selection_term_labels),
+  function(term_index) {
+    max(abs(elastic_net_coefficients[design_assignment == term_index]))
+  },
+  numeric(1)
+)
+names(elastic_net_term_strength) <- selection_term_labels
+
+elastic_net_selected_predictors <- names(elastic_net_term_strength)[
+  elastic_net_term_strength > 0
+]
+
+elastic_net_alpha_table[c("Lambda (1se)", "Minimum CV deviance")] <- lapply(
+  elastic_net_alpha_table[c("Lambda (1se)", "Minimum CV deviance")],
+  round,
+  digits = 5
+)
+```
+
+```{r elastic-net-alpha-table, echo=FALSE}
+knitr::kable(
+  elastic_net_alpha_table,
+  align = c("r", "r", "r"),
+  caption = paste0(
+    "Cross-validated deviance by elastic-net mixing parameter (selected alpha = ",
+    elastic_net_alpha, ")"
+  )
+)
+```
+
+## Stepwise selection
+
+Bidirectional stepwise selection starts from the full 17-predictor logistic
+model and minimizes Akaike's information criterion (AIC). It uses the same
+training patients as LASSO and elastic net.
+
+```{r stepwise-selection}
+full_selection_model <- glm(
+  formula = selection_formula,
+  data = selection_training_data,
+  family = binomial(link = "logit"),
+  na.action = na.fail
+)
+
+if (!isTRUE(full_selection_model$converged)) {
+  stop("The full model used for stepwise selection did not converge.")
+}
+
+stepwise_model <- MASS::stepAIC(
+  full_selection_model,
+  direction = "both",
+  trace = FALSE
+)
+
+if (!isTRUE(stepwise_model$converged)) {
+  stop("The stepwise logistic regression did not converge.")
+}
+
+stepwise_selected_predictors <- attr(
+  terms(stepwise_model),
+  "term.labels"
+)
+```
+
+## Logistic models using the selected variables
+
+The selection methods determine the predictor sets only. Three standard,
+unpenalized multivariable logistic regressions are then fitted in the same
+2020-2023 training sample: one using the variables selected by LASSO, one using those
+selected by elastic net and one using those selected by stepwise AIC.
+
+```{r selected-logistic-models}
+lasso_refit_formula <- reformulate(
+  termlabels = lasso_selected_predictors,
+  response = outcome_variable
+)
+elastic_net_refit_formula <- reformulate(
+  termlabels = elastic_net_selected_predictors,
+  response = outcome_variable
+)
+stepwise_refit_formula <- reformulate(
+  termlabels = stepwise_selected_predictors,
+  response = outcome_variable
+)
+
+lasso_refit_model <- glm(
+  formula = lasso_refit_formula,
+  data = selection_training_data,
+  family = binomial(link = "logit"),
+  na.action = na.fail
+)
+elastic_net_refit_model <- glm(
+  formula = elastic_net_refit_formula,
+  data = selection_training_data,
+  family = binomial(link = "logit"),
+  na.action = na.fail
+)
+stepwise_refit_model <- glm(
+  formula = stepwise_refit_formula,
+  data = selection_training_data,
+  family = binomial(link = "logit"),
+  na.action = na.fail
+)
+
+if (!isTRUE(lasso_refit_model$converged) || anyNA(coef(lasso_refit_model))) {
+  stop("The logistic model using LASSO-selected variables is not estimable.")
+}
+if (!isTRUE(elastic_net_refit_model$converged) || anyNA(coef(elastic_net_refit_model))) {
+  stop("The logistic model using elastic-net-selected variables is not estimable.")
+}
+if (!isTRUE(stepwise_refit_model$converged) || anyNA(coef(stepwise_refit_model))) {
+  stop("The logistic model using stepwise-selected variables is not estimable.")
+}
+```
+
+## Selected-variable table
+
+```{r selected-variable-table, echo=FALSE}
+selection_results_table <- data.frame(
+  `Candidate predictor` = candidate_predictors,
+  `Maximum absolute LASSO coefficient` = unname(
+    lasso_term_strength[candidate_predictors]
+  ),
+  `Selected by LASSO` = ifelse(
+    candidate_predictors %in% lasso_selected_predictors,
+    "Yes",
+    "No"
+  ),
+  `Maximum absolute elastic-net coefficient` = unname(
+    elastic_net_term_strength[candidate_predictors]
+  ),
+  `Selected by elastic net` = ifelse(
+    candidate_predictors %in% elastic_net_selected_predictors,
+    "Yes",
+    "No"
+  ),
+  `Selected by stepwise AIC` = ifelse(
+    candidate_predictors %in% stepwise_selected_predictors,
+    "Yes",
+    "No"
+  ),
+  `Selected by all three methods` = ifelse(
+    candidate_predictors %in% Reduce(
+      intersect,
+      list(
+        lasso_selected_predictors,
+        elastic_net_selected_predictors,
+        stepwise_selected_predictors
+      )
+    ),
+    "Yes",
+    "No"
+  ),
+  check.names = FALSE
+)
+
+coefficient_strength_columns <- c(
+  "Maximum absolute LASSO coefficient",
+  "Maximum absolute elastic-net coefficient"
+)
+selection_results_table[coefficient_strength_columns] <- lapply(
+  selection_results_table[coefficient_strength_columns],
+  round,
+  digits = 4
+)
+
+knitr::kable(
+  selection_results_table,
+  align = c("l", "r", "c", "r", "c", "c", "c"),
+  caption = "Predictors selected independently by LASSO, elastic net and stepwise AIC"
+)
+```
+
+## Coefficients of the refitted logistic models
+
+The following are ordinary logistic-regression coefficients, not
+penalized (LASSO or elastic-net) coefficients. Confidence intervals are Wald 95% intervals.
+
+```{r coefficient-table-function, echo=FALSE}
+logistic_coefficient_table <- function(model) {
+  coefficient_matrix <- summary(model)$coefficients
+  critical_value <- qnorm(0.975)
+
+  result <- data.frame(
+    Term = rownames(coefficient_matrix),
+    Coefficient = coefficient_matrix[, "Estimate"],
+    `Standard error` = coefficient_matrix[, "Std. Error"],
+    `Odds ratio` = exp(coefficient_matrix[, "Estimate"]),
+    `OR 95% CI lower` = exp(
+      coefficient_matrix[, "Estimate"] -
+        critical_value * coefficient_matrix[, "Std. Error"]
+    ),
+    `OR 95% CI upper` = exp(
+      coefficient_matrix[, "Estimate"] +
+        critical_value * coefficient_matrix[, "Std. Error"]
+    ),
+    `P value` = coefficient_matrix[, "Pr(>|z|)"],
+    check.names = FALSE,
+    row.names = NULL
+  )
+
+  numeric_columns <- setdiff(names(result), c("Term", "P value"))
+  result[numeric_columns] <- lapply(
+    result[numeric_columns],
+    round,
+    digits = 3
+  )
+  result$`P value` <- format.pval(
+    result$`P value`,
+    digits = 3,
+    eps = 0.001
+  )
+  result
+}
+```
+
+### Logistic regression with LASSO-selected variables
+
+```{r lasso-coefficient-table, echo=FALSE}
+lasso_coefficient_table <- logistic_coefficient_table(lasso_refit_model)
+
+knitr::kable(
+  lasso_coefficient_table,
+  align = c("l", rep("r", 6)),
+  caption = paste(
+    "Logistic regression fitted with the variables selected by LASSO",
+    "in the 2020-2023 training period"
+  )
+)
+```
+
+### Logistic regression with elastic-net-selected variables
+
+```{r elastic-net-coefficient-table, echo=FALSE}
+elastic_net_coefficient_table <- logistic_coefficient_table(
+  elastic_net_refit_model
+)
+
+knitr::kable(
+  elastic_net_coefficient_table,
+  align = c("l", rep("r", 6)),
+  caption = paste(
+    "Logistic regression fitted with the variables selected by elastic net",
+    "in the 2020-2023 training period"
+  )
+)
+```
+
+### Logistic regression with stepwise-selected variables
+
+```{r stepwise-coefficient-table, echo=FALSE}
+stepwise_coefficient_table <- logistic_coefficient_table(stepwise_refit_model)
+
+knitr::kable(
+  stepwise_coefficient_table,
+  align = c("l", rep("r", 6)),
+  caption = paste(
+    "Logistic regression fitted with the variables selected by stepwise AIC",
+    "in the 2020-2023 training period"
+  )
+)
+```
+
+## Training and test AUC of the refitted logistic models
+
+Predictions use the three unpenalized logistic models refitted after variable
+selection. Performance is reported both in the 2020-2023 training sample and in
+the 2024-2025 validation sample (patients with complete data for all candidate
+predictors). The validation AUC therefore measures temporal discrimination in
+patients who were not used for variable selection or coefficient estimation.
+AUC 95% confidence intervals are calculated with DeLong's method.
+
+```{r selection-performance-table, echo=FALSE}
+lasso_training_probability <- predict(
+  lasso_refit_model,
+  newdata = selection_training_data,
+  type = "response"
+)
+lasso_test_probability <- predict(
+  lasso_refit_model,
+  newdata = selection_test_data,
+  type = "response"
+)
+elastic_net_training_probability <- predict(
+  elastic_net_refit_model,
+  newdata = selection_training_data,
+  type = "response"
+)
+elastic_net_test_probability <- predict(
+  elastic_net_refit_model,
+  newdata = selection_test_data,
+  type = "response"
+)
+stepwise_training_probability <- predict(
+  stepwise_refit_model,
+  newdata = selection_training_data,
+  type = "response"
+)
+stepwise_test_probability <- predict(
+  stepwise_refit_model,
+  newdata = selection_test_data,
+  type = "response"
+)
+
+evaluate_selection_predictions <- function(
+  method,
+  sample_name,
+  observed,
+  predicted_probability,
+  number_of_selected_predictors
+) {
+  roc_object <- pROC::roc(
+    response = observed,
+    predictor = predicted_probability,
+    levels = c(0, 1),
+    direction = "<",
+    quiet = TRUE
+  )
+  auc_confidence_interval <- as.numeric(
+    pROC::ci.auc(roc_object, method = "delong")
+  )
+
+  data.frame(
+    Method = method,
+    Sample = sample_name,
+    `Selected predictors` = number_of_selected_predictors,
+    N = length(observed),
+    Deaths = sum(observed),
+    AUC = calculate_auc(observed, predicted_probability),
+    `AUC 95% CI lower` = auc_confidence_interval[1],
+    `AUC 95% CI upper` = auc_confidence_interval[3],
+    `Brier score` = mean(
+      (observed - predicted_probability)^2
+    ),
+    check.names = FALSE
+  )
+}
+
+selection_performance_table <- rbind(
+  evaluate_selection_predictions(
+    method = "Logistic model with LASSO-selected variables",
+    sample_name = "Training (2020-2023)",
+    observed = selection_training_data$mortality_30d,
+    predicted_probability = lasso_training_probability,
+    number_of_selected_predictors = length(lasso_selected_predictors)
+  ),
+  evaluate_selection_predictions(
+    method = "Logistic model with LASSO-selected variables",
+    sample_name = "Validation (2024-2025)",
+    observed = selection_test_data$mortality_30d,
+    predicted_probability = lasso_test_probability,
+    number_of_selected_predictors = length(lasso_selected_predictors)
+  ),
+  evaluate_selection_predictions(
+    method = "Logistic model with elastic-net-selected variables",
+    sample_name = "Training (2020-2023)",
+    observed = selection_training_data$mortality_30d,
+    predicted_probability = elastic_net_training_probability,
+    number_of_selected_predictors = length(elastic_net_selected_predictors)
+  ),
+  evaluate_selection_predictions(
+    method = "Logistic model with elastic-net-selected variables",
+    sample_name = "Validation (2024-2025)",
+    observed = selection_test_data$mortality_30d,
+    predicted_probability = elastic_net_test_probability,
+    number_of_selected_predictors = length(elastic_net_selected_predictors)
+  ),
+  evaluate_selection_predictions(
+    method = "Logistic model with stepwise-selected variables",
+    sample_name = "Training (2020-2023)",
+    observed = selection_training_data$mortality_30d,
+    predicted_probability = stepwise_training_probability,
+    number_of_selected_predictors = length(stepwise_selected_predictors)
+  ),
+  evaluate_selection_predictions(
+    method = "Logistic model with stepwise-selected variables",
+    sample_name = "Validation (2024-2025)",
+    observed = selection_test_data$mortality_30d,
+    predicted_probability = stepwise_test_probability,
+    number_of_selected_predictors = length(stepwise_selected_predictors)
+  )
+)
+
+performance_columns <- c(
+  "AUC", "AUC 95% CI lower", "AUC 95% CI upper", "Brier score"
+)
+selection_performance_table[performance_columns] <- lapply(
+  selection_performance_table[performance_columns],
+  round,
+  digits = 3
+)
+
+knitr::kable(
+  selection_performance_table,
+  align = c("l", "l", rep("r", 7)),
+  caption = paste(
+    "Training (2020-2023) and validation (2024-2025) performance with DeLong 95% AUC confidence intervals",
+    "for the logistic models refitted after variable selection"
+  )
+)
+```
+
+
+# Models restricted to significant predictors
+
+The refitted models above can retain predictors whose coefficients are not
+statistically significant. Here, each of the three logistic models is simplified
+by backward elimination in the 2020-2023 training sample: the predictor with the
+highest likelihood-ratio p value (`drop1`, chi-squared test, evaluated per
+variable so that all categories of a factor are kept or removed together) is
+removed, the model is refitted, and the process is repeated until every
+remaining predictor has p < 0.05. Each anatomical region is therefore kept
+as a Yes/No variable (AIS >= 4 vs <= 3) if it is significant. The 2024-2025 validation sample is not used.
+
+```{r significant-only-models}
+significance_threshold <- 0.05
+
+eliminate_nonsignificant_predictors <- function(model, threshold) {
+  removed_predictors <- character(0)
+  repeat {
+    term_tests <- drop1(model, test = "Chisq")
+    term_tests <- term_tests[rownames(term_tests) != "<none>", , drop = FALSE]
+    if (nrow(term_tests) == 0L) break
+    p_values <- term_tests[["Pr(>Chi)"]]
+    worst_index <- which.max(p_values)
+    if (p_values[worst_index] < threshold) break
+    removed_term <- rownames(term_tests)[worst_index]
+    removed_predictors <- c(removed_predictors, removed_term)
+    model <- update(model, as.formula(paste(". ~ . -", removed_term)))
+  }
+  list(model = model, removed = removed_predictors)
+}
+
+lasso_significant <- eliminate_nonsignificant_predictors(
+  lasso_refit_model, significance_threshold
+)
+elastic_net_significant <- eliminate_nonsignificant_predictors(
+  elastic_net_refit_model, significance_threshold
+)
+stepwise_significant <- eliminate_nonsignificant_predictors(
+  stepwise_refit_model, significance_threshold
+)
+
+lasso_significant_model <- lasso_significant$model
+elastic_net_significant_model <- elastic_net_significant$model
+stepwise_significant_model <- stepwise_significant$model
+```
+
+```{r significant-removed-table, echo=FALSE}
+removed_predictors_table <- data.frame(
+  Method = c("LASSO", "Elastic net", "Stepwise AIC"),
+  `Predictors before` = c(
+    length(lasso_selected_predictors),
+    length(elastic_net_selected_predictors),
+    length(stepwise_selected_predictors)
+  ),
+  `Predictors after` = c(
+    length(attr(terms(lasso_significant_model), "term.labels")),
+    length(attr(terms(elastic_net_significant_model), "term.labels")),
+    length(attr(terms(stepwise_significant_model), "term.labels"))
+  ),
+  `Removed predictors (in order of removal)` = vapply(
+    list(
+      lasso_significant$removed,
+      elastic_net_significant$removed,
+      stepwise_significant$removed
+    ),
+    function(x) if (length(x) == 0L) "None" else paste(x, collapse = ", "),
+    character(1)
+  ),
+  check.names = FALSE
+)
+
+knitr::kable(
+  removed_predictors_table,
+  align = c("l", "r", "r", "l"),
+  caption = "Predictors removed because of p >= 0.05 (likelihood-ratio test)"
+)
+```
+
+## Coefficients of the models with significant predictors only
+
+### Logistic regression with LASSO-selected significant variables
+
+```{r lasso-significant-coefficient-table, echo=FALSE}
+knitr::kable(
+  logistic_coefficient_table(lasso_significant_model),
+  align = c("l", rep("r", 6)),
+  caption = "Logistic regression with LASSO-selected variables, significant predictors only (2020-2023 training period)"
+)
+```
+
+### Logistic regression with elastic-net-selected significant variables
+
+```{r elastic-net-significant-coefficient-table, echo=FALSE}
+knitr::kable(
+  logistic_coefficient_table(elastic_net_significant_model),
+  align = c("l", rep("r", 6)),
+  caption = "Logistic regression with elastic-net-selected variables, significant predictors only (2020-2023 training period)"
+)
+```
+
+### Logistic regression with stepwise-selected significant variables
+
+```{r stepwise-significant-coefficient-table, echo=FALSE}
+knitr::kable(
+  logistic_coefficient_table(stepwise_significant_model),
+  align = c("l", rep("r", 6)),
+  caption = "Logistic regression with stepwise-selected variables, significant predictors only (2020-2023 training period)"
+)
+```
+
+## Training and validation AUC of the models with significant predictors only
+
+```{r significant-performance-table, echo=FALSE}
+significant_models <- list(
+  "Logistic model with LASSO-selected significant variables" =
+    lasso_significant_model,
+  "Logistic model with elastic-net-selected significant variables" =
+    elastic_net_significant_model,
+  "Logistic model with stepwise-selected significant variables" =
+    stepwise_significant_model
+)
+
+significant_performance_table <- do.call(
+  rbind,
+  lapply(names(significant_models), function(method_name) {
+    model <- significant_models[[method_name]]
+    number_of_predictors <- length(attr(terms(model), "term.labels"))
+    rbind(
+      evaluate_selection_predictions(
+        method = method_name,
+        sample_name = "Training (2020-2023)",
+        observed = selection_training_data$mortality_30d,
+        predicted_probability = predict(
+          model, newdata = selection_training_data, type = "response"
+        ),
+        number_of_selected_predictors = number_of_predictors
+      ),
+      evaluate_selection_predictions(
+        method = method_name,
+        sample_name = "Validation (2024-2025)",
+        observed = selection_test_data$mortality_30d,
+        predicted_probability = predict(
+          model, newdata = selection_test_data, type = "response"
+        ),
+        number_of_selected_predictors = number_of_predictors
+      )
+    )
+  })
+)
+
+significant_performance_table[performance_columns] <- lapply(
+  significant_performance_table[performance_columns],
+  round,
+  digits = 3
+)
+
+knitr::kable(
+  significant_performance_table,
+  align = c("l", "l", rep("r", 7)),
+  caption = paste(
+    "Training (2020-2023) and validation (2024-2025) performance with",
+    "DeLong 95% AUC confidence intervals for the models restricted to",
+    "significant predictors"
+  )
+)
+```

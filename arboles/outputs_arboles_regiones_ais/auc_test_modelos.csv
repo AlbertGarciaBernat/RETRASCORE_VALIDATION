@@ -1,0 +1,7 @@
+"Modelo";"AUC";"IC95_inf";"IC95_sup"
+"ctree (9 regiones)";0,774;0,754;0,793
+"rpart podado (9 regiones)";0,703;0,683;0,723
+"Logistica, AIS continuo";0,79;0,77;0,81
+"Logistica, AIS >= 3 por region";0,736;0,717;0,754
+"ctree (9 regiones + edad)";0,815;0,796;0,833
+"Logistica, AIS continuo + edad";0,835;0,819;0,852

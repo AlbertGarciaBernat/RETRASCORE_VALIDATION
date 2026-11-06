@@ -1,0 +1,55 @@
+"Region";"corte";"frecuencia"
+"Craneo";1;0
+"Craneo";2;0
+"Craneo";3;0
+"Craneo";4;100
+"Craneo";5;0
+"Craneo";6;0
+"Cara";1;0
+"Cara";2;72,3
+"Cara";3;27
+"Cara";4;0,7
+"Cara";5;0
+"Cara";6;0
+"Cuello";1;4,8
+"Cuello";2;56
+"Cuello";3;1,6
+"Cuello";4;37,6
+"Cuello";5;0
+"Cuello";6;0
+"Torax";1;0
+"Torax";2;0
+"Torax";3;0
+"Torax";4;91
+"Torax";5;9
+"Torax";6;0
+"Abdomen";1;0
+"Abdomen";2;0
+"Abdomen";3;0
+"Abdomen";4;60,7
+"Abdomen";5;39,3
+"Abdomen";6;0
+"Columna vertebral";1;0
+"Columna vertebral";2;0
+"Columna vertebral";3;6,1
+"Columna vertebral";4;0,6
+"Columna vertebral";5;93,3
+"Columna vertebral";6;0
+"Extremidades superiores";1;0
+"Extremidades superiores";2;0
+"Extremidades superiores";3;10
+"Extremidades superiores";4;90
+"Extremidades superiores";5;0
+"Extremidades superiores";6;0
+"Extremidades inferiores";1;0
+"Extremidades inferiores";2;0
+"Extremidades inferiores";3;0
+"Extremidades inferiores";4;0
+"Extremidades inferiores";5;100
+"Extremidades inferiores";6;0
+"Piel y partes blandas";1;0
+"Piel y partes blandas";2;0,5
+"Piel y partes blandas";3;4,8
+"Piel y partes blandas";4;85,3
+"Piel y partes blandas";5;9,4
+"Piel y partes blandas";6;0
