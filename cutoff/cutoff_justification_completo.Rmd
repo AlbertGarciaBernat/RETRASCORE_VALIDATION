@@ -1,0 +1,987 @@
+---
+title: "RETRAUCI - Justification of the regional AIS severity cutoff (>= 3 vs >= 4)"
+output:
+  html_document:
+    toc: true
+    toc_depth: 2
+date: "2026-11-09"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE)
+options(width = 120)
+```
+
+# Purpose and principles
+
+Each anatomical region is coded as a Yes/No severity variable from its regional
+AIS (0-6). The cutoff used so far was AIS >= 3; AIS >= 4 appeared to give a better
+model. This document tests that formally and builds the empirical justification
+for the choice of the cutoff following three rules:
+
+1. **The cutoff is chosen with the training sample only (2020-2023).** The
+   validation sample (2024-2025) is never used to pick the cutoff. It is
+   reported afterwards, as a sensitivity analysis, to show that the choice
+   generalises.
+2. **The criteria are fixed in advance**: AIC and BIC in the training sample and
+   repeated, stratified 10-fold cross-validation (AUC, Brier score and log-loss)
+   inside the training sample.
+3. **Everything is reported**, including the alternative cutoff (>= 3) and a
+   cutoff-free alternative (ordinal categories).
+
+The clinical argument (AIS 3 = "serious", AIS 4 = "severe", and AIS 3 is a very
+heterogeneous category) is argued in the text of the manuscript; this document
+covers the empirical evidence:
+
+* Section 2: 30-day mortality by AIS level in each region (training sample).
+* Section 3: comparison of cutoffs with pre-specified criteria (training sample).
+* Section 4: sensitivity analysis and transparency (>= 3 vs >= 4).
+* Section 5: cutoff-free alternative with ordinal categories.
+* Section 6: summary table and suggested wording.
+
+# 1. Data
+
+The cohort is built with the preprocessing code of
+`ultimate_validation_preprocessing.Rmd` (all code before the heading
+"Preprocessed cohort" is executed). No data file is read or written other than
+the raw registry export used by that document.
+
+```{r load-cohort}
+library(dplyr)
+library(lubridate)
+
+preprocessing_path <- file.path(
+  "..", "ultimate_validation", "ultimate_validation_preprocessing.Rmd"
+)
+if (!file.exists(preprocessing_path)) {
+  stop("Preprocessing document not found: ", preprocessing_path)
+}
+preprocessing_lines <- readLines(preprocessing_path, warn = FALSE)
+cohort_end_line <- grep("^# Preprocessed cohort", preprocessing_lines)[1]
+if (is.na(cohort_end_line)) {
+  stop("The heading '# Preprocessed cohort' was not found.")
+}
+
+preprocessing_code_file <- tempfile(fileext = ".R")
+invisible(knitr::purl(
+  text = preprocessing_lines[seq_len(cohort_end_line - 1L)],
+  output = preprocessing_code_file,
+  documentation = 0L,
+  quiet = TRUE
+))
+
+preprocessing_env <- new.env(parent = globalenv())
+# The preprocessing code opens a table in RStudio; it is not needed here.
+preprocessing_env$View <- function(...) invisible(NULL)
+invisible(capture.output(
+  suppressMessages(suppressWarnings(
+    source(preprocessing_code_file, local = preprocessing_env, echo = FALSE)
+  ))
+))
+retrascore_cohort <- preprocessing_env$retrascore_cohort
+if (is.null(retrascore_cohort)) {
+  stop("The preprocessing code did not create 'retrascore_cohort'.")
+}
+```
+
+```{r setup-data}
+required_packages <- c("pROC", "MASS")
+missing_packages <- required_packages[
+  !vapply(required_packages, requireNamespace, logical(1), quietly = TRUE)
+]
+if (length(missing_packages) > 0L) {
+  stop("Install the following packages: ", paste(missing_packages, collapse = ", "))
+}
+
+outcome_variable <- "mortality_30d"
+training_years <- 2020:2023
+validation_years <- 2024:2025
+
+# The same 11 non-anatomical candidates and 6 anatomical regions used in the
+# variable-selection analysis.
+non_anatomical <- c(
+  "age_category",
+  "preinjury_antithrombotic",
+  "prehospital_intubation",
+  "high_risk_mechanism",
+  "pupils",
+  "gcs_le_8",
+  "hemodynamic_failure",
+  "respiratory_failure",
+  "coagulopathy_24h",
+  "mechanical_ventilation",
+  "massive_hemorrhage"
+)
+
+regions_df <- data.frame(
+  key = c(
+    "head", "upper_extremity", "thorax", "abdomen", "lower_extremity", "external"
+  ),
+  label = c(
+    "Head", "Upper extremity", "Thorax", "Abdomen",
+    "Lower extremity (incl. pelvis)", "External"
+  ),
+  ais_var = c(
+    "head_ais", "upper_extremity_ais", "thorax_ais", "abdomen_ais",
+    "lower_extremity_incl_pelvis_ais", "external_ais"
+  ),
+  stringsAsFactors = FALSE
+)
+
+needed_variables <- c(
+  "row_id", "trauma_year", outcome_variable, non_anatomical, regions_df$ais_var
+)
+if (!all(needed_variables %in% names(retrascore_cohort))) {
+  stop(
+    "Missing variables: ",
+    paste(setdiff(needed_variables, names(retrascore_cohort)), collapse = ", ")
+  )
+}
+
+# Derived severity variables for every region:
+#   <key>_ge2 ... <key>_ge5 : Yes if regional AIS >= 2 ... >= 5, otherwise No
+#   <key>_ord               : ordinal categories 0 / 1-2 / 3 / 4-6
+add_derived_columns <- function(data) {
+  for (i in seq_len(nrow(regions_df))) {
+    ais <- data[[regions_df$ais_var[i]]]
+    for (cutoff in 2:5) {
+      data[[paste0(regions_df$key[i], "_ge", cutoff)]] <- factor(
+        ifelse(ais >= cutoff, "Yes", "No"),
+        levels = c("No", "Yes")
+      )
+    }
+    data[[paste0(regions_df$key[i], "_ord")]] <- factor(
+      case_when(
+        ais == 0 ~ "0",
+        ais <= 2 ~ "1-2",
+        ais == 3 ~ "3",
+        ais >= 4 ~ "4-6"
+      ),
+      levels = c("0", "1-2", "3", "4-6")
+    )
+  }
+  data
+}
+
+# Complete cases for the outcome and all candidate predictors (same patients as
+# in the variable-selection analysis).
+cutoff_data <- retrascore_cohort[
+  complete.cases(retrascore_cohort[, needed_variables, drop = FALSE]),
+  needed_variables,
+  drop = FALSE
+]
+cutoff_data <- add_derived_columns(droplevels(cutoff_data))
+
+training_data <- cutoff_data[cutoff_data$trauma_year %in% training_years, , drop = FALSE]
+validation_data <- cutoff_data[cutoff_data$trauma_year %in% validation_years, , drop = FALSE]
+if (nrow(training_data) == 0L || nrow(validation_data) == 0L) {
+  stop("The training or validation sample is empty.")
+}
+
+knitr::kable(
+  data.frame(
+    Sample = c("Training (2020-2023)", "Validation (2024-2025)"),
+    Patients = c(nrow(training_data), nrow(validation_data)),
+    `Deaths within 30 days` = c(
+      sum(training_data[[outcome_variable]]),
+      sum(validation_data[[outcome_variable]])
+    ),
+    `Mortality (%)` = round(100 * c(
+      mean(training_data[[outcome_variable]]),
+      mean(validation_data[[outcome_variable]])
+    ), 1),
+    check.names = FALSE
+  ),
+  align = c("l", "r", "r", "r"),
+  caption = "Analysis samples (complete cases)"
+)
+
+fmt_p <- function(p) format.pval(p, digits = 3, eps = 0.001)
+```
+
+# 2. 30-day mortality by AIS level in each region (training sample)
+
+If the cutoff is empirically justified, the 30-day mortality should rise
+clearly between the categories that the cutoff separates. The table shows, for
+each region, deaths / patients (mortality) at each AIS level, using only the
+2020-2023 training sample. The figure shows the same with 95% Wilson confidence
+intervals (levels with fewer than 10 patients are not drawn); dotted lines mark
+the two candidate cutoffs (between 2 and 3 for >= 3, between 3 and 4 for >= 4).
+
+```{r mortality-by-level}
+mortality_by_level <- do.call(rbind, lapply(seq_len(nrow(regions_df)), function(i) {
+  ais <- training_data[[regions_df$ais_var[i]]]
+  y <- training_data[[outcome_variable]]
+  do.call(rbind, lapply(0:6, function(level) {
+    in_level <- ais == level
+    n <- sum(in_level)
+    d <- sum(y[in_level])
+    ci <- if (n > 0L) {
+      suppressWarnings(prop.test(d, n, correct = FALSE)$conf.int)
+    } else {
+      c(NA_real_, NA_real_)
+    }
+    data.frame(
+      Region = regions_df$label[i],
+      AIS = level,
+      N = n,
+      Deaths = d,
+      Mortality = if (n > 0L) 100 * d / n else NA_real_,
+      Lower = 100 * ci[1],
+      Upper = 100 * ci[2],
+      stringsAsFactors = FALSE
+    )
+  }))
+}))
+
+mortality_wide <- sapply(regions_df$label, function(region_label) {
+  rows <- mortality_by_level[mortality_by_level$Region == region_label, ]
+  ifelse(
+    rows$N == 0L,
+    "-",
+    sprintf("%d/%d (%.1f%%)", rows$Deaths, rows$N, rows$Mortality)
+  )
+})
+mortality_wide <- data.frame(`Regional AIS` = 0:6, mortality_wide, check.names = FALSE)
+
+knitr::kable(
+  mortality_wide,
+  align = c("c", rep("r", nrow(regions_df))),
+  caption = "30-day deaths / patients (mortality) by regional AIS level, training sample 2020-2023"
+)
+```
+
+```{r mortality-plot, fig.width=11, fig.height=6.5, fig.cap="30-day mortality by regional AIS level (training sample). Dotted lines: candidate cutoffs >= 3 (between 2 and 3) and >= 4 (between 3 and 4)."}
+old_par <- par(mfrow = c(2, 3), mar = c(4, 4, 3, 1))
+for (region_label in regions_df$label) {
+  rows <- mortality_by_level[
+    mortality_by_level$Region == region_label & mortality_by_level$N >= 10L, ,
+    drop = FALSE
+  ]
+  if (nrow(rows) == 0L) {
+    next
+  }
+  plot(
+    rows$AIS, rows$Mortality,
+    type = "b", pch = 19,
+    xlim = c(0, 6), ylim = c(0, max(rows$Upper, na.rm = TRUE)),
+    xlab = "Regional AIS", ylab = "30-day mortality (%)",
+    main = region_label
+  )
+  segments(rows$AIS, rows$Lower, rows$AIS, rows$Upper)
+  abline(v = c(2.5, 3.5), lty = 3, col = "grey50")
+}
+par(old_par)
+```
+
+The two contrasts that decide the cutoff are shown next, using only patients
+injured in the region:
+
+* **AIS 3 vs AIS 1-2**: if AIS 3 behaves like minor injuries, it should not be
+  called "severe" (supports a cutoff of >= 4).
+* **AIS 4-6 vs AIS 3**: if mortality jumps between 3 and 4, the two levels
+  should not be pooled (supports separating them at >= 4).
+
+The comparisons are crude (unadjusted); adjusted estimates are in Section 5.
+
+```{r mortality-contrasts}
+compare_groups <- function(data, ais_var, hi_levels, lo_levels) {
+  y <- data[[outcome_variable]]
+  ais <- data[[ais_var]]
+  y_hi <- y[ais %in% hi_levels]
+  y_lo <- y[ais %in% lo_levels]
+  if (length(y_hi) < 5L || length(y_lo) < 5L) {
+    return(data.frame(
+      `N (higher)` = length(y_hi), `N (lower)` = length(y_lo),
+      `Mortality higher (%)` = NA_real_, `Mortality lower (%)` = NA_real_,
+      `Risk difference, pp (95% CI)` = "n/a", `Odds ratio (95% CI)` = "n/a",
+      `p (Fisher)` = "n/a", check.names = FALSE
+    ))
+  }
+  rd_test <- suppressWarnings(prop.test(
+    c(sum(y_hi), sum(y_lo)), c(length(y_hi), length(y_lo)), correct = FALSE
+  ))
+  fisher <- fisher.test(matrix(
+    c(sum(y_hi), length(y_hi) - sum(y_hi), sum(y_lo), length(y_lo) - sum(y_lo)),
+    nrow = 2, byrow = TRUE
+  ))
+  risk_difference <- 100 * (mean(y_hi) - mean(y_lo))
+  data.frame(
+    `N (higher)` = length(y_hi),
+    `N (lower)` = length(y_lo),
+    `Mortality higher (%)` = 100 * mean(y_hi),
+    `Mortality lower (%)` = 100 * mean(y_lo),
+    `Risk difference, pp (95% CI)` = sprintf(
+      "%.1f (%.1f to %.1f)", risk_difference,
+      100 * rd_test$conf.int[1], 100 * rd_test$conf.int[2]
+    ),
+    `Odds ratio (95% CI)` = sprintf(
+      "%.2f (%.2f-%.2f)", fisher$estimate, fisher$conf.int[1], fisher$conf.int[2]
+    ),
+    `p (Fisher)` = fmt_p(fisher$p.value),
+    check.names = FALSE
+  )
+}
+
+contrast_definitions <- list(
+  list(name = "AIS 3 vs AIS 1-2", hi = 3, lo = 1:2),
+  list(name = "AIS 4-6 vs AIS 3", hi = 4:6, lo = 3)
+)
+
+contrast_table <- do.call(rbind, lapply(seq_len(nrow(regions_df)), function(i) {
+  do.call(rbind, lapply(contrast_definitions, function(contrast) {
+    cbind(
+      Region = regions_df$label[i],
+      Contrast = contrast$name,
+      compare_groups(training_data, regions_df$ais_var[i], contrast$hi, contrast$lo),
+      stringsAsFactors = FALSE
+    )
+  }))
+}))
+
+knitr::kable(
+  contrast_table,
+  digits = 1,
+  align = c("l", "l", rep("r", 7)),
+  caption = "Unadjusted 30-day mortality contrasts between adjacent AIS categories (training sample)"
+)
+```
+
+# 3. Comparison of cutoffs with pre-specified criteria (training sample only)
+
+## 3.1 Models and criteria
+
+For each candidate cutoff the same logistic model is fitted in the 2020-2023
+training sample: the 11 non-anatomical candidate predictors plus the six
+anatomical regions, **all coded with the same cutoff** (severe = regional AIS >=
+cutoff). Using the full 17-predictor model removes the influence of variable
+selection on the comparison. Because the models are not nested (they differ in
+the coding of the same variables), the likelihood-ratio test is not valid, so
+the comparison uses:
+
+* **AIC and BIC** (training sample).
+* **Repeated stratified 10-fold cross-validation inside the training sample**
+  (10 repeats, folds identical for all models): AUC, Brier score and log-loss
+  computed on the pooled out-of-fold predictions of each repeat.
+
+Note that the cutoffs >= 5 (and, in some regions, >= 4) classify very few
+patients as severe, notably in the upper extremity and external regions (see the
+table below). Estimates for those regions are unstable, so the comparison should
+rely mainly on >= 3 versus >= 4.
+
+```{r model-specs}
+spec_formulas <- list(
+  ge2 = reformulate(c(non_anatomical, paste0(regions_df$key, "_ge2")), response = outcome_variable),
+  ge3 = reformulate(c(non_anatomical, paste0(regions_df$key, "_ge3")), response = outcome_variable),
+  ge4 = reformulate(c(non_anatomical, paste0(regions_df$key, "_ge4")), response = outcome_variable),
+  ge5 = reformulate(c(non_anatomical, paste0(regions_df$key, "_ge5")), response = outcome_variable),
+  ordinal = reformulate(c(non_anatomical, paste0(regions_df$key, "_ord")), response = outcome_variable)
+)
+spec_labels <- c(
+  ge2 = "Binary: severe = AIS >= 2",
+  ge3 = "Binary: severe = AIS >= 3",
+  ge4 = "Binary: severe = AIS >= 4",
+  ge5 = "Binary: severe = AIS >= 5",
+  ordinal = "Ordinal: 0 / 1-2 / 3 / 4-6"
+)
+
+training_fits <- lapply(spec_formulas, function(model_formula) {
+  glm(
+    formula = model_formula,
+    data = training_data,
+    family = binomial(link = "logit")
+  )
+})
+if (!all(vapply(training_fits, function(m) isTRUE(m$converged), logical(1)))) {
+  stop("At least one logistic model did not converge.")
+}
+
+severity_prevalence <- data.frame(
+  Region = regions_df$label,
+  `Severe if AIS >= 3, n (%)` = vapply(seq_len(nrow(regions_df)), function(i) {
+    n <- sum(training_data[[regions_df$ais_var[i]]] >= 3)
+    sprintf("%d (%.1f%%)", n, 100 * n / nrow(training_data))
+  }, character(1)),
+  `Severe if AIS >= 4, n (%)` = vapply(seq_len(nrow(regions_df)), function(i) {
+    n <- sum(training_data[[regions_df$ais_var[i]]] >= 4)
+    sprintf("%d (%.1f%%)", n, 100 * n / nrow(training_data))
+  }, character(1)),
+  check.names = FALSE
+)
+
+knitr::kable(
+  severity_prevalence,
+  align = c("l", "r", "r"),
+  caption = "Patients classified as severe in each region under the two main cutoffs (training sample)"
+)
+```
+
+```{r cross-validation}
+cv_folds <- 10L
+cv_repeats <- 10L
+cv_seed <- 20261109L
+
+fast_auc <- function(predicted, observed) {
+  n_events <- sum(observed == 1)
+  n_non_events <- sum(observed == 0)
+  (sum(rank(predicted)[observed == 1]) - n_events * (n_events + 1) / 2) /
+    (n_events * n_non_events)
+}
+
+stratified_folds <- function(y, k, seed) {
+  set.seed(seed)
+  fold_id <- integer(length(y))
+  for (class_value in unique(y)) {
+    idx <- which(y == class_value)
+    fold_id[idx] <- sample(rep_len(seq_len(k), length(idx)))
+  }
+  fold_id
+}
+
+# Very sparse categories (for example AIS >= 5 in the upper extremity, with a
+# single patient in the training sample) can be absent from a training fold. A
+# predictor with a single value in the fold cannot be estimated, so it is left
+# out of that fold's model.
+drop_constant_terms <- function(model_formula, data) {
+  term_labels <- attr(terms(model_formula), "term.labels")
+  has_variation <- vapply(term_labels, function(term_label) {
+    values <- data[[term_label]]
+    length(unique(values[!is.na(values)])) >= 2L
+  }, logical(1))
+  reformulate(term_labels[has_variation], response = outcome_variable)
+}
+
+# Out-of-fold predicted probabilities: one column per repeat. The folds depend
+# only on the outcome and the seed, so they are identical for every model.
+cv_oof_predictions <- function(model_formula, data, k, repeats, seed) {
+  y <- data[[outcome_variable]]
+  oof <- matrix(NA_real_, nrow = nrow(data), ncol = repeats)
+  for (r in seq_len(repeats)) {
+    fold_id <- stratified_folds(y, k, seed + r)
+    for (f in seq_len(k)) {
+      in_training_fold <- fold_id != f
+      fold_training_data <- data[in_training_fold, , drop = FALSE]
+      fit <- suppressWarnings(glm(
+        formula = drop_constant_terms(model_formula, fold_training_data),
+        data = fold_training_data,
+        family = binomial(link = "logit")
+      ))
+      oof[!in_training_fold, r] <- suppressWarnings(predict(
+        fit, newdata = data[!in_training_fold, , drop = FALSE], type = "response"
+      ))
+    }
+  }
+  oof
+}
+
+oof_metrics <- function(oof, y) {
+  clip <- function(p) pmin(pmax(p, 1e-12), 1 - 1e-12)
+  data.frame(
+    repeat_id = seq_len(ncol(oof)),
+    AUC = apply(oof, 2, fast_auc, observed = y),
+    Brier = apply(oof, 2, function(p) mean((y - p)^2)),
+    LogLoss = apply(oof, 2, function(p) -mean(y * log(clip(p)) + (1 - y) * log(1 - clip(p))))
+  )
+}
+
+# All specifications are cross-validated here (the ordinal one is used in
+# Section 5).
+cv_oof <- lapply(spec_formulas, cv_oof_predictions,
+  data = training_data, k = cv_folds, repeats = cv_repeats, seed = cv_seed
+)
+cv_metrics <- lapply(cv_oof, oof_metrics, y = training_data[[outcome_variable]])
+
+cv_numeric <- data.frame(
+  Model = unname(spec_labels[names(spec_formulas)]),
+  Parameters = vapply(training_fits, function(m) sum(!is.na(coef(m))), numeric(1)),
+  AIC = vapply(training_fits, AIC, numeric(1)),
+  BIC = vapply(training_fits, BIC, numeric(1)),
+  CV_AUC = vapply(cv_metrics, function(m) mean(m$AUC), numeric(1)),
+  CV_AUC_SD = vapply(cv_metrics, function(m) sd(m$AUC), numeric(1)),
+  CV_Brier = vapply(cv_metrics, function(m) mean(m$Brier), numeric(1)),
+  CV_LogLoss = vapply(cv_metrics, function(m) mean(m$LogLoss), numeric(1)),
+  row.names = names(spec_formulas),
+  stringsAsFactors = FALSE
+)
+
+format_cv_table <- function(spec_keys) {
+  rows <- cv_numeric[spec_keys, , drop = FALSE]
+  data.frame(
+    Model = rows$Model,
+    Parameters = rows$Parameters,
+    AIC = round(rows$AIC, 1),
+    BIC = round(rows$BIC, 1),
+    `CV AUC (mean)` = round(rows$CV_AUC, 4),
+    `CV AUC (SD over repeats)` = round(rows$CV_AUC_SD, 4),
+    `CV Brier` = round(rows$CV_Brier, 4),
+    `CV log-loss` = round(rows$CV_LogLoss, 4),
+    check.names = FALSE,
+    row.names = NULL
+  )
+}
+```
+
+## 3.2 Global cutoff (all regions coded with the same cutoff)
+
+Lower AIC / BIC, higher CV AUC and lower CV Brier / log-loss are better. The SD
+of the CV AUC only reflects the randomness of the fold assignment, not
+sampling uncertainty.
+
+```{r cutoff-table}
+knitr::kable(
+  format_cv_table(c("ge2", "ge3", "ge4", "ge5")),
+  align = c("l", rep("r", 7)),
+  caption = "Comparison of global cutoffs in the training sample (2020-2023): information criteria and cross-validated performance"
+)
+```
+
+The primary comparison is >= 4 against >= 3. Positive differences favour the
+cutoff >= 4. The paired DeLong test uses the pooled out-of-fold predictions of
+the first cross-validation repeat (same patients in both models); it is
+indicative, since out-of-fold predictions are not fully independent.
+
+```{r cutoff-paired}
+y_training <- training_data[[outcome_variable]]
+
+paired_delong <- function(y, p_new, p_ref) {
+  roc_new <- pROC::roc(y, p_new, levels = c(0, 1), direction = "<", quiet = TRUE)
+  roc_ref <- pROC::roc(y, p_ref, levels = c(0, 1), direction = "<", quiet = TRUE)
+  test <- pROC::roc.test(roc_new, roc_ref, method = "delong", paired = TRUE)
+  difference <- as.numeric(pROC::auc(roc_new)) - as.numeric(pROC::auc(roc_ref))
+  z <- abs(as.numeric(test$statistic))
+  se <- if (is.finite(z) && z > 0) abs(difference) / z else NA_real_
+  data.frame(
+    difference = difference,
+    lower = difference - 1.96 * se,
+    upper = difference + 1.96 * se,
+    p = test$p.value
+  )
+}
+
+delong_ge4_vs_ge3 <- paired_delong(y_training, cv_oof$ge4[, 1], cv_oof$ge3[, 1])
+auc_difference_by_repeat <- cv_metrics$ge4$AUC - cv_metrics$ge3$AUC
+
+primary_comparison <- data.frame(
+  Criterion = c(
+    "AIC (AIC of >= 3 minus AIC of >= 4)",
+    "BIC (BIC of >= 3 minus BIC of >= 4)",
+    "CV AUC (>= 4 minus >= 3), mean over repeats [range]",
+    "CV log-loss (>= 3 minus >= 4), mean over repeats",
+    "CV Brier score (>= 3 minus >= 4), mean over repeats",
+    "Paired DeLong, first repeat: AUC difference (95% CI), p"
+  ),
+  `Favours >= 4 if` = c(
+    "positive", "positive", "positive", "positive", "positive", "positive"
+  ),
+  Value = c(
+    sprintf("%.1f", cv_numeric["ge3", "AIC"] - cv_numeric["ge4", "AIC"]),
+    sprintf("%.1f", cv_numeric["ge3", "BIC"] - cv_numeric["ge4", "BIC"]),
+    sprintf(
+      "%.4f [%.4f to %.4f]", mean(auc_difference_by_repeat),
+      min(auc_difference_by_repeat), max(auc_difference_by_repeat)
+    ),
+    sprintf("%.4f", cv_numeric["ge3", "CV_LogLoss"] - cv_numeric["ge4", "CV_LogLoss"]),
+    sprintf("%.4f", cv_numeric["ge3", "CV_Brier"] - cv_numeric["ge4", "CV_Brier"]),
+    sprintf(
+      "%.4f (%.4f to %.4f), p = %s", delong_ge4_vs_ge3$difference,
+      delong_ge4_vs_ge3$lower, delong_ge4_vs_ge3$upper, fmt_p(delong_ge4_vs_ge3$p)
+    )
+  ),
+  check.names = FALSE
+)
+
+knitr::kable(
+  primary_comparison,
+  align = c("l", "c", "r"),
+  caption = "Primary comparison: severe = AIS >= 4 versus AIS >= 3 (training sample only)"
+)
+```
+
+Rule of thumb for AIC / BIC: a difference > 10 is strong evidence for the model
+with the lower value, 4-7 clearly favours it, and < 2 means that the models are
+practically equivalent.
+
+## 3.3 Is the best cutoff the same in every region?
+
+Each region is recoded in turn with cutoffs >= 2 to >= 5, keeping the other five
+regions at >= 4. The table shows the AIC increase over the best cutoff of that
+region (0 = best). If all regions prefer the same cutoff, a single global cutoff
+is easy to defend; if one region prefers a different one, this should be
+discussed (region-specific cutoffs are possible but add complexity).
+
+```{r region-scan}
+region_scan <- do.call(rbind, lapply(seq_len(nrow(regions_df)), function(i) {
+  do.call(rbind, lapply(2:5, function(cutoff) {
+    region_terms <- paste0(regions_df$key, "_ge4")
+    region_terms[i] <- paste0(regions_df$key[i], "_ge", cutoff)
+    fit <- glm(
+      formula = reformulate(c(non_anatomical, region_terms), response = outcome_variable),
+      data = training_data,
+      family = binomial(link = "logit")
+    )
+    data.frame(
+      Region = regions_df$label[i],
+      Cutoff = paste0(">= ", cutoff),
+      AIC = AIC(fit),
+      stringsAsFactors = FALSE
+    )
+  }))
+}))
+region_scan$Delta <- ave(region_scan$AIC, region_scan$Region, FUN = function(x) x - min(x))
+
+region_scan_wide <- tapply(
+  region_scan$Delta, list(region_scan$Region, region_scan$Cutoff), sum
+)
+region_scan_wide <- region_scan_wide[regions_df$label, , drop = FALSE]
+region_scan_table <- data.frame(
+  Region = rownames(region_scan_wide),
+  round(region_scan_wide, 1),
+  `Best cutoff` = colnames(region_scan_wide)[apply(region_scan_wide, 1, which.min)],
+  check.names = FALSE,
+  row.names = NULL
+)
+
+knitr::kable(
+  region_scan_table,
+  align = c("l", rep("r", ncol(region_scan_wide)), "c"),
+  caption = "Increase in AIC over the best cutoff of each region (other regions fixed at >= 4), training sample"
+)
+```
+
+# 4. Sensitivity analysis and transparency: >= 3 versus >= 4
+
+The cutoff has been chosen in Section 3 without using the validation sample.
+Here both cutoffs are fully reported, and the 2024-2025 validation sample is
+used **only to check that the conclusion generalises**, not to choose.
+
+## 4.1 Performance in training and validation samples
+
+Models fitted in the training sample (2020-2023) and evaluated in both samples.
+The DeLong test compares the two AUCs on the same patients (paired).
+
+```{r validation-performance}
+evaluate_model <- function(model, data, sample_label, spec_key) {
+  y <- data[[outcome_variable]]
+  p <- predict(model, newdata = data, type = "response")
+  roc_object <- pROC::roc(y, p, levels = c(0, 1), direction = "<", quiet = TRUE)
+  auc_ci <- as.numeric(pROC::ci.auc(roc_object, method = "delong"))
+  data.frame(
+    Spec = spec_key,
+    Model = unname(spec_labels[spec_key]),
+    Sample = sample_label,
+    N = length(y),
+    Deaths = sum(y),
+    AUC = auc_ci[2],
+    `AUC 95% CI` = sprintf("%.3f-%.3f", auc_ci[1], auc_ci[3]),
+    Brier = mean((y - p)^2),
+    check.names = FALSE,
+    stringsAsFactors = FALSE
+  )
+}
+
+performance_specs <- c("ge3", "ge4", "ordinal")
+validation_performance <- do.call(rbind, lapply(performance_specs, function(spec_key) {
+  rbind(
+    evaluate_model(training_fits[[spec_key]], training_data, "Training (2020-2023)", spec_key),
+    evaluate_model(training_fits[[spec_key]], validation_data, "Validation (2024-2025)", spec_key)
+  )
+}))
+
+knitr::kable(
+  validation_performance[
+    validation_performance$Spec %in% c("ge3", "ge4"),
+    c("Model", "Sample", "N", "Deaths", "AUC", "AUC 95% CI", "Brier")
+  ],
+  digits = 3,
+  row.names = FALSE,
+  align = c("l", "l", rep("r", 5)),
+  caption = "Performance of the logistic models with the cutoff >= 3 and >= 4 (full 17-predictor models)"
+)
+
+validation_delong <- paired_delong(
+  validation_data[[outcome_variable]],
+  predict(training_fits$ge4, newdata = validation_data, type = "response"),
+  predict(training_fits$ge3, newdata = validation_data, type = "response")
+)
+```
+
+Validation AUC, cutoff >= 4 minus cutoff >= 3: **`r sprintf("%.4f (95%% CI %.4f to %.4f), paired DeLong p = %s", validation_delong$difference, validation_delong$lower, validation_delong$upper, fmt_p(validation_delong$p))`**.
+
+## 4.2 Does the cutoff change which variables are selected?
+
+Bidirectional stepwise AIC selection (same procedure as in the main analysis)
+starting from the full model of each cutoff, in the training sample.
+
+```{r stepwise-by-cutoff}
+step_models <- list()
+for (cutoff_key in c("ge3", "ge4")) {
+  full_model_for_step <- glm(
+    formula = spec_formulas[[cutoff_key]],
+    data = training_data,
+    family = binomial(link = "logit"),
+    na.action = na.fail
+  )
+  step_models[[cutoff_key]] <- MASS::stepAIC(
+    full_model_for_step, direction = "both", trace = FALSE
+  )
+}
+
+variable_of_term <- function(term) sub("_(ge[0-9]|ord)$", "", term)
+selected_variables <- lapply(step_models, function(model) {
+  variable_of_term(attr(terms(model), "term.labels"))
+})
+all_variables <- c(non_anatomical, regions_df$key)
+predictor_names <- ifelse(
+  all_variables %in% regions_df$key,
+  paste0(regions_df$label[match(all_variables, regions_df$key)], " (regional severity)"),
+  all_variables
+)
+
+stepwise_selection_table <- data.frame(
+  Predictor = predictor_names,
+  `Cutoff >= 3` = ifelse(all_variables %in% selected_variables$ge3, "selected", "-"),
+  `Cutoff >= 4` = ifelse(all_variables %in% selected_variables$ge4, "selected", "-"),
+  check.names = FALSE
+)
+
+knitr::kable(
+  stepwise_selection_table,
+  align = c("l", "c", "c"),
+  caption = "Predictors retained by stepwise AIC under each cutoff (training sample)"
+)
+
+stepwise_performance <- do.call(rbind, lapply(c("ge3", "ge4"), function(spec_key) {
+  rbind(
+    evaluate_model(step_models[[spec_key]], training_data, "Training (2020-2023)", spec_key),
+    evaluate_model(step_models[[spec_key]], validation_data, "Validation (2024-2025)", spec_key)
+  )
+}))
+stepwise_performance$Model <- paste(
+  "Stepwise-AIC model,", sub("Binary: severe = ", "severe = ", stepwise_performance$Model)
+)
+stepwise_performance$Predictors <- rep(
+  vapply(step_models, function(m) length(attr(terms(m), "term.labels")), numeric(1)),
+  each = 2
+)
+
+knitr::kable(
+  stepwise_performance[, c("Model", "Predictors", "Sample", "AUC", "AUC 95% CI", "Brier")],
+  digits = 3,
+  row.names = FALSE,
+  align = c("l", "r", "l", "r", "r", "r"),
+  caption = "Performance of the stepwise-AIC models under each cutoff"
+)
+
+stepwise_validation_delong <- paired_delong(
+  validation_data[[outcome_variable]],
+  predict(step_models$ge4, newdata = validation_data, type = "response"),
+  predict(step_models$ge3, newdata = validation_data, type = "response")
+)
+```
+
+Validation AUC of the stepwise model, cutoff >= 4 minus cutoff >= 3: **`r sprintf("%.4f (95%% CI %.4f to %.4f), paired DeLong p = %s", stepwise_validation_delong$difference, stepwise_validation_delong$lower, stepwise_validation_delong$upper, fmt_p(stepwise_validation_delong$p))`**.
+
+## 4.3 Are the other effects stable?
+
+Odds ratios (Wald 95% CI) of the full models with both cutoffs. The
+non-anatomical predictors should keep similar estimates; the region rows have a
+different meaning in each column (severe = AIS >= 3 vs AIS >= 4).
+
+```{r odds-ratio-stability}
+odds_ratio_table <- function(model) {
+  coefficients_matrix <- summary(model)$coefficients
+  est <- coefficients_matrix[, "Estimate"]
+  se <- coefficients_matrix[, "Std. Error"]
+  data.frame(
+    term = rownames(coefficients_matrix),
+    normalised = sub("_ge[0-9]Yes$", "_severe", rownames(coefficients_matrix)),
+    or = sprintf("%.2f (%.2f-%.2f)", exp(est), exp(est - 1.96 * se), exp(est + 1.96 * se)),
+    stringsAsFactors = FALSE
+  )
+}
+or_ge3 <- odds_ratio_table(training_fits$ge3)
+or_ge4 <- odds_ratio_table(training_fits$ge4)
+or_ge3 <- or_ge3[or_ge3$term != "(Intercept)", ]
+
+or_comparison <- data.frame(
+  Term = or_ge3$term,
+  `OR, severe = AIS >= 3` = or_ge3$or,
+  `OR, severe = AIS >= 4` = or_ge4$or[match(or_ge3$normalised, or_ge4$normalised)],
+  check.names = FALSE,
+  row.names = NULL
+)
+or_comparison$Term <- sub("_ge3Yes$", " (severe)", or_comparison$Term)
+
+knitr::kable(
+  or_comparison,
+  align = c("l", "r", "r"),
+  caption = "Odds ratios of the full logistic models (training sample)"
+)
+```
+
+# 5. Cutoff-free alternative: ordinal categories
+
+To avoid depending on a single threshold, each region is also coded with four
+categories: **0** (no injury in the region), **1-2** (minor/moderate), **3**
+(serious) and **4-6** (severe or worse). The model estimates a separate effect
+for each category, so the data decide whether AIS 3 behaves like the lower or
+like the higher categories. The ordinal model uses more parameters (3 per
+region instead of 1), which AIC/BIC and cross-validation penalise.
+
+## 5.1 Binary cutoffs versus ordinal coding
+
+```{r ordinal-comparison}
+knitr::kable(
+  format_cv_table(c("ge3", "ge4", "ordinal")),
+  align = c("l", rep("r", 7)),
+  caption = "Binary cutoffs versus ordinal coding in the training sample (information criteria and cross-validation)"
+)
+
+ordinal_vs_ge4 <- paired_delong(y_training, cv_oof$ordinal[, 1], cv_oof$ge4[, 1])
+```
+
+Out-of-fold AUC of the ordinal model minus that of the cutoff >= 4 model (first
+repeat, paired DeLong): **`r sprintf("%.4f (95%% CI %.4f to %.4f), p = %s", ordinal_vs_ge4$difference, ordinal_vs_ge4$lower, ordinal_vs_ge4$upper, fmt_p(ordinal_vs_ge4$p))`**.
+If the ordinal model does not outperform the binary model with cutoff >= 4 on
+AIC/BIC and cross-validation, the simpler binary coding is justified.
+
+```{r ordinal-validation}
+knitr::kable(
+  validation_performance[
+    , c("Model", "Sample", "N", "Deaths", "AUC", "AUC 95% CI", "Brier")
+  ],
+  digits = 3,
+  row.names = FALSE,
+  align = c("l", "l", rep("r", 5)),
+  caption = "Training and validation performance (validation shown only as a check; it was not used to choose the coding)"
+)
+```
+
+## 5.2 Adjusted effect of each category
+
+Adjusted odds ratios from the ordinal model (reference: AIS 0 in that region,
+adjusted for all other predictors). The last two columns test directly whether
+AIS 4-6 differs from AIS 3 in the same region. A significant difference with
+OR(4-6 vs 3) clearly above 1 means that levels 3 and 4-6 should not be pooled
+under the same "severe" label; an OR(3 vs 0) close to 1 for AIS 3 would show
+that AIS 3 carries little additional risk on its own.
+
+```{r ordinal-effects}
+ordinal_fit <- training_fits$ordinal
+ordinal_coefficients <- summary(ordinal_fit)$coefficients
+ordinal_vcov <- vcov(ordinal_fit)
+
+format_or <- function(estimate, std_error) {
+  sprintf(
+    "%.2f (%.2f-%.2f)", exp(estimate),
+    exp(estimate - 1.96 * std_error), exp(estimate + 1.96 * std_error)
+  )
+}
+
+ordinal_effects <- do.call(rbind, lapply(seq_len(nrow(regions_df)), function(i) {
+  key <- regions_df$key[i]
+  names_needed <- paste0(key, c("_ord1-2", "_ord3", "_ord4-6"))
+  if (!all(names_needed %in% rownames(ordinal_coefficients))) {
+    return(NULL)
+  }
+  b <- ordinal_coefficients[names_needed, "Estimate"]
+  s <- ordinal_coefficients[names_needed, "Std. Error"]
+  difference <- b[3] - b[2]
+  difference_se <- sqrt(
+    ordinal_vcov[names_needed[3], names_needed[3]] +
+      ordinal_vcov[names_needed[2], names_needed[2]] -
+      2 * ordinal_vcov[names_needed[3], names_needed[2]]
+  )
+  data.frame(
+    Region = regions_df$label[i],
+    `OR AIS 1-2 vs 0` = format_or(b[1], s[1]),
+    `OR AIS 3 vs 0` = format_or(b[2], s[2]),
+    `OR AIS 4-6 vs 0` = format_or(b[3], s[3]),
+    `OR AIS 4-6 vs 3` = format_or(difference, difference_se),
+    `p (4-6 vs 3)` = fmt_p(2 * pnorm(-abs(difference / difference_se))),
+    check.names = FALSE,
+    stringsAsFactors = FALSE
+  )
+}))
+
+knitr::kable(
+  ordinal_effects,
+  align = c("l", rep("r", 5)),
+  row.names = FALSE,
+  caption = "Adjusted odds ratios by AIS category (ordinal model, training sample)"
+)
+```
+
+# 6. Summary and suggested wording
+
+```{r summary-table}
+validation_auc <- function(spec_key) {
+  validation_performance$AUC[
+    validation_performance$Spec == spec_key &
+      validation_performance$Sample == "Validation (2024-2025)"
+  ]
+}
+
+summary_table <- data.frame(
+  Criterion = c(
+    "AIC (training)", "BIC (training)", "CV AUC (training)",
+    "CV Brier score (training)", "CV log-loss (training)",
+    "Validation AUC (check only, 2024-2025)"
+  ),
+  `Severe = AIS >= 3` = c(
+    sprintf("%.1f", cv_numeric["ge3", "AIC"]),
+    sprintf("%.1f", cv_numeric["ge3", "BIC"]),
+    sprintf("%.4f", cv_numeric["ge3", "CV_AUC"]),
+    sprintf("%.4f", cv_numeric["ge3", "CV_Brier"]),
+    sprintf("%.4f", cv_numeric["ge3", "CV_LogLoss"]),
+    sprintf("%.4f", validation_auc("ge3"))
+  ),
+  `Severe = AIS >= 4` = c(
+    sprintf("%.1f", cv_numeric["ge4", "AIC"]),
+    sprintf("%.1f", cv_numeric["ge4", "BIC"]),
+    sprintf("%.4f", cv_numeric["ge4", "CV_AUC"]),
+    sprintf("%.4f", cv_numeric["ge4", "CV_Brier"]),
+    sprintf("%.4f", cv_numeric["ge4", "CV_LogLoss"]),
+    sprintf("%.4f", validation_auc("ge4"))
+  ),
+  `Ordinal (0 / 1-2 / 3 / 4-6)` = c(
+    sprintf("%.1f", cv_numeric["ordinal", "AIC"]),
+    sprintf("%.1f", cv_numeric["ordinal", "BIC"]),
+    sprintf("%.4f", cv_numeric["ordinal", "CV_AUC"]),
+    sprintf("%.4f", cv_numeric["ordinal", "CV_Brier"]),
+    sprintf("%.4f", cv_numeric["ordinal", "CV_LogLoss"]),
+    sprintf("%.4f", validation_auc("ordinal"))
+  ),
+  check.names = FALSE
+)
+
+knitr::kable(
+  summary_table,
+  align = c("l", "r", "r", "r"),
+  caption = "Summary of the evidence for the choice of the cutoff"
+)
+```
+
+**Suggested wording** (adapt the bracketed parts to the results above):
+
+*Methods.* "Regional injury severity was defined as AIS >= 4 (severe) versus
+AIS <= 3. This cutoff was selected using the training sample (2020-2023) only,
+comparing cutoffs of AIS >= 2 to >= 5 with the Akaike and Bayesian information
+criteria and 10-fold cross-validation repeated 10 times (AUC, Brier score and
+log-loss). The validation sample (2024-2025) was not used to choose the cutoff.
+As sensitivity analyses, we repeated the analysis with a cutoff of AIS >= 3 and
+with ordinal categories (0, 1-2, 3 and 4-6)."
+
+*Results.* "In the training sample, the cutoff of AIS >= 4 had [lower AIC and
+BIC (difference [x] and [y])] and [higher cross-validated AUC ([a] vs [b])] than
+AIS >= 3. [30-day mortality increased from [p1]% in AIS 3 to [p2]% in AIS 4-6
+for [region(s)], whereas AIS 3 was similar to AIS 1-2 ([p3]%)]. In the
+validation sample the AUC was [c] for AIS >= 4 and [d] for AIS >= 3 [(paired
+DeLong p = [p])], and the variables selected by stepwise regression were
+[the same / similar] with both cutoffs (Supplementary Table [x])."
+
+*Discussion/limitations.* "The cutoff is a modelling choice; ordinal coding,
+which does not require a single threshold, gave [similar / not better]
+performance at the cost of more parameters. Cross-validation estimates of the
+difference between cutoffs are correlated across folds and should be read as
+descriptive."

@@ -1451,7 +1451,9 @@ knitr::kable(
 ### Logistic regression with stepwise-selected variables
 
 ```{r stepwise-coefficient-table, echo=FALSE}
-stepwise_coefficient_table <- logistic_coefficient_table(stepwise_refit_model)
+stepwise_coefficient_table <- logistic_coefficient_table(
+  stepwise_refit_model
+)
 
 knitr::kable(
   stepwise_coefficient_table,
@@ -1603,23 +1605,22 @@ knitr::kable(
 ```
 
 
-# Interaction models: head x abdomen and head x thorax
+# Interaction model: head x abdomen
 
 The logistic model fitted with the variables selected by stepwise AIC is
-compared with two otherwise identical models that add one interaction term
-between anatomical regions: head x abdomen and head x thorax (each region coded
+compared with an otherwise identical model that adds one interaction term
+between anatomical regions: head x abdomen (each region coded
 Yes if AIS >= 4 and No if AIS <= 3). If a region of the interaction was not
 selected by stepwise AIC, its main effect is added together with the
 interaction. All models are fitted in the 2020-2023 training sample and
 evaluated in the 2024-2025 validation sample. The likelihood-ratio test compares
-each interaction model with the stepwise model without interaction; the DeLong
-test compares the validation AUC of each interaction model with that of the
+the interaction model with the stepwise model without interaction; the DeLong
+test compares the validation AUC of the interaction model with that of the
 stepwise model (paired, same patients).
 
 ```{r interaction-models, echo=FALSE}
 interaction_specs <- list(
-  "Stepwise model + head x abdomen" = c("head_mais_group", "abdomen_mais_group"),
-  "Stepwise model + head x thorax" = c("head_mais_group", "thorax_mais_group")
+  "Stepwise model + head x abdomen" = c("head_mais_group", "abdomen_mais_group")
 )
 
 interaction_models <- lapply(interaction_specs, function(regions) {
@@ -1682,7 +1683,7 @@ model_comparison_table[is.na(model_comparison_table)] <- ""
 knitr::kable(
   model_comparison_table,
   align = c("l", rep("r", 7)),
-  caption = "Stepwise-AIC logistic model compared with models adding a head x abdomen or head x thorax interaction (training sample 2020-2023)"
+  caption = "Stepwise-AIC logistic model compared with the model adding a head x abdomen interaction (training sample 2020-2023)"
 )
 ```
 
@@ -1765,7 +1766,7 @@ knitr::kable(
 )
 ```
 
-## Coefficients of the interaction models
+## Coefficients of the interaction model
 
 ```{r interaction-coefficient-tables, echo=FALSE, results='asis'}
 for (model_name in names(interaction_models)) {
@@ -1943,3 +1944,21 @@ knitr::kable(
   )
 )
 ```
+```{r}
+new<-glm(formula = mortality_30d ~ age_category + preinjury_antithrombotic + prehospital_intubation + 
+     pupils + gcs_le_8 + hemodynamic_failure + 
+    respiratory_failure + coagulopathy_24h + mechanical_ventilation + 
+    massive_hemorrhage + head_mais_group  + high_risk_mechanism +
+    external_mais_group, family = binomial(link = "logit"), 
+    data = selection_training_data, na.action = na.fail)
+summary(new)
+
+new2<-glm(formula = mortality_30d ~ age_category + preinjury_antithrombotic + prehospital_intubation + 
+     pupils + gcs_le_8 + hemodynamic_failure + 
+    respiratory_failure + coagulopathy_24h + mechanical_ventilation + 
+    massive_hemorrhage + head_mais_group   +
+    external_mais_group, family = binomial(link = "logit"), 
+    data = selection_training_data, na.action = na.fail)
+summary(new2)
+```
+

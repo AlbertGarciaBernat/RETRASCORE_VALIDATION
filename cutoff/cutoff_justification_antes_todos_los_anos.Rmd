@@ -1,0 +1,241 @@
+---
+title: "RETRAUCI - Justification of the regional AIS severity cutoff (>= 4 vs >= 3)"
+output:
+  html_document:
+    toc: true
+    toc_depth: 2
+date: "2026-11-09"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE)
+options(width = 120)
+```
+
+# Purpose
+
+Each anatomical region is coded as a Yes/No severity variable from its regional
+AIS (0-6). The cutoff used so far was AIS >= 3; this document gathers the
+evidence on whether AIS >= 4 is a better definition of "severe". Only the
+**training sample (2020-2023)** is used. The 2024-2025 validation sample is not
+used here, because the cutoff was explored before this analysis and that sample
+cannot be presented as independent evidence for the choice.
+
+The evidence has three parts, always comparing the two definitions that can
+actually be used (severe = AIS >= 3 and severe = AIS >= 4):
+
+1. **Mortality in each definition**: how many patients each definition labels as
+   severe, and how different their mortality is from that of the rest.
+2. **Model comparison of >= 4 vs >= 3** with AIC, BIC and cross-validation.
+3. **Effect of each definition by region**: adjusted odds ratios and the
+   preferred cutoff region by region.
+
+# 1. Data
+
+The cohort is built with the preprocessing code of
+`ultimate_validation_preprocessing.Rmd` (all code before the heading
+"Preprocessed cohort" is executed).
+
+```{r load-cohort}
+library(dplyr)
+library(lubridate)
+
+preprocessing_path <- file.path(
+  "..", "ultimate_validation", "ultimate_validation_preprocessing.Rmd"
+)
+if (!file.exists(preprocessing_path)) {
+  stop("Preprocessing document not found: ", preprocessing_path)
+}
+preprocessing_lines <- readLines(preprocessing_path, warn = FALSE)
+cohort_end_line <- grep("^# Preprocessed cohort", preprocessing_lines)[1]
+if (is.na(cohort_end_line)) {
+  stop("The heading '# Preprocessed cohort' was not found.")
+}
+
+preprocessing_code_file <- tempfile(fileext = ".R")
+invisible(knitr::purl(
+  text = preprocessing_lines[seq_len(cohort_end_line - 1L)],
+  output = preprocessing_code_file,
+  documentation = 0L,
+  quiet = TRUE
+))
+
+preprocessing_env <- new.env(parent = globalenv())
+# The preprocessing code opens a table in RStudio; it is not needed here.
+preprocessing_env$View <- function(...) invisible(NULL)
+invisible(capture.output(
+  suppressMessages(suppressWarnings(
+    source(preprocessing_code_file, local = preprocessing_env, echo = FALSE)
+  ))
+))
+retrascore_cohort <- preprocessing_env$retrascore_cohort
+if (is.null(retrascore_cohort)) {
+  stop("The preprocessing code did not create 'retrascore_cohort'.")
+}
+```
+
+```{r setup-data}
+outcome_variable <- "mortality_30d"
+training_years <- 2020:2023
+
+# The same 11 non-anatomical candidates and 6 anatomical regions used in the
+# variable-selection analysis.
+non_anatomical <- c(
+  "age_category",
+  "preinjury_antithrombotic",
+  "prehospital_intubation",
+  "high_risk_mechanism",
+  "pupils",
+  "gcs_le_8",
+  "hemodynamic_failure",
+  "respiratory_failure",
+  "coagulopathy_24h",
+  "mechanical_ventilation",
+  "massive_hemorrhage"
+)
+
+regions_df <- data.frame(
+  key = c(
+    "head", "upper_extremity", "thorax", "abdomen", "lower_extremity", "external"
+  ),
+  label = c(
+    "Head", "Upper extremity", "Thorax", "Abdomen",
+    "Lower extremity (incl. pelvis)", "External"
+  ),
+  ais_var = c(
+    "head_ais", "upper_extremity_ais", "thorax_ais", "abdomen_ais",
+    "lower_extremity_incl_pelvis_ais", "external_ais"
+  ),
+  stringsAsFactors = FALSE
+)
+
+needed_variables <- c(
+  "row_id", "trauma_year", outcome_variable, non_anatomical, regions_df$ais_var
+)
+if (!all(needed_variables %in% names(retrascore_cohort))) {
+  stop(
+    "Missing variables: ",
+    paste(setdiff(needed_variables, names(retrascore_cohort)), collapse = ", ")
+  )
+}
+
+# Derived severity variables for every region:
+#   <key>_ge3, <key>_ge4 : Yes if regional AIS >= 3 (or >= 4), otherwise No
+add_derived_columns <- function(data) {
+  for (i in seq_len(nrow(regions_df))) {
+    ais <- data[[regions_df$ais_var[i]]]
+    for (cutoff in 3:4) {
+      data[[paste0(regions_df$key[i], "_ge", cutoff)]] <- factor(
+        ifelse(ais >= cutoff, "Yes", "No"),
+        levels = c("No", "Yes")
+      )
+    }
+  }
+  data
+}
+
+# Complete cases for the outcome and all candidate predictors (same patients as
+# in the variable-selection analysis), training period only.
+cutoff_data <- retrascore_cohort[
+  complete.cases(retrascore_cohort[, needed_variables, drop = FALSE]),
+  needed_variables,
+  drop = FALSE
+]
+cutoff_data <- add_derived_columns(droplevels(cutoff_data))
+training_data <- cutoff_data[cutoff_data$trauma_year %in% training_years, , drop = FALSE]
+if (nrow(training_data) == 0L) {
+  stop("The training sample is empty.")
+}
+y_training <- training_data[[outcome_variable]]
+
+knitr::kable(
+  data.frame(
+    Sample = "Training (2020-2023)",
+    Patients = nrow(training_data),
+    `Deaths within 30 days` = sum(y_training),
+    `Mortality (%)` = round(100 * mean(y_training), 1),
+    check.names = FALSE
+  ),
+  align = c("l", "r", "r", "r"),
+  caption = "Analysis sample (complete cases)"
+)
+
+fmt_p <- function(p) format.pval(p, digits = 3, eps = 0.001)
+```
+
+# 2. Mortality by AIS level in each region
+
+If AIS 4 is a better cutoff than AIS 3, mortality should rise clearly between 3
+and 4 and not between 2 and 3. The table shows deaths / patients (30-day
+mortality) at each AIS level; the figure shows the same with 95% Wilson
+confidence intervals (levels with fewer than 10 patients are not drawn). Dotted
+lines mark the two candidate cutoffs.
+
+```{r mortality-by-level}
+mortality_by_level <- do.call(rbind, lapply(seq_len(nrow(regions_df)), function(i) {
+  ais <- training_data[[regions_df$ais_var[i]]]
+  do.call(rbind, lapply(0:6, function(level) {
+    in_level <- ais == level
+    n <- sum(in_level)
+    d <- sum(y_training[in_level])
+    ci <- if (n > 0L) {
+      suppressWarnings(prop.test(d, n, correct = FALSE)$conf.int)
+    } else {
+      c(NA_real_, NA_real_)
+    }
+    data.frame(
+      Region = regions_df$label[i],
+      AIS = level,
+      N = n,
+      Deaths = d,
+      Mortality = if (n > 0L) 100 * d / n else NA_real_,
+      Lower = 100 * ci[1],
+      Upper = 100 * ci[2],
+      stringsAsFactors = FALSE
+    )
+  }))
+}))
+
+mortality_wide <- sapply(regions_df$label, function(region_label) {
+  rows <- mortality_by_level[mortality_by_level$Region == region_label, ]
+  ifelse(
+    rows$N == 0L,
+    "-",
+    sprintf("%d/%d (%.1f%%)", rows$Deaths, rows$N, rows$Mortality)
+  )
+})
+mortality_wide <- data.frame(`Regional AIS` = 0:6, mortality_wide, check.names = FALSE)
+
+knitr::kable(
+  mortality_wide,
+  align = c("c", rep("r", nrow(regions_df))),
+  caption = "30-day deaths / patients (mortality) by regional AIS level, training sample 2020-2023"
+)
+```
+
+```{r mortality-plot, fig.width=11, fig.height=6.5, fig.cap="30-day mortality by regional AIS level (training sample, same y axis in all panels). Dotted lines: candidate cutoffs >= 3 (between 2 and 3) and >= 4 (between 3 and 4)."}
+# Same y axis in every panel so that regions can be compared directly.
+plotted_levels <- mortality_by_level[mortality_by_level$N >= 10L, , drop = FALSE]
+common_ylim <- c(0, max(plotted_levels$Upper, na.rm = TRUE))
+
+old_par <- par(mfrow = c(2, 3), mar = c(4, 4, 3, 1))
+for (region_label in regions_df$label) {
+  rows <- mortality_by_level[
+    mortality_by_level$Region == region_label & mortality_by_level$N >= 10L, ,
+    drop = FALSE
+  ]
+  if (nrow(rows) == 0L) {
+    next
+  }
+  plot(
+    rows$AIS, rows$Mortality,
+    type = "b", pch = 19,
+    xlim = c(0, 6), ylim = common_ylim,
+    xlab = "Regional AIS", ylab = "30-day mortality (%)",
+    main = region_label
+  )
+  segments(rows$AIS, rows$Lower, rows$AIS, rows$Upper)
+  abline(v = c(2.5, 3.5), lty = 3, col = "grey50")
+}
+par(old_par)
+```

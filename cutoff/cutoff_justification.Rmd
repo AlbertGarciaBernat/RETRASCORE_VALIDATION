@@ -1,0 +1,717 @@
+---
+title: "RETRAUCI - Justification of the regional AIS severity cutoff (>= 4 vs >= 3)"
+output:
+  html_document:
+    toc: true
+    toc_depth: 2
+date: "2026-11-09"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE)
+options(width = 120)
+```
+
+# Purpose
+
+Each anatomical region is coded as a Yes/No severity variable from its regional
+AIS (0-6). The cutoff used so far was AIS >= 3; this document looks at how
+30-day mortality changes with the regional AIS level in each region, to help
+decide whether AIS >= 3 or AIS >= 4 is a better definition of "severe".
+
+All years present in the registry export are used (no split by year), and
+patients are analysed region by region, without taking the injuries in the other
+regions into account.
+
+# 1. Data
+
+The cohort is built with the preprocessing code of
+`ultimate_validation_preprocessing.Rmd` (all code before the heading
+"Preprocessed cohort" is executed).
+
+```{r load-cohort}
+library(dplyr)
+library(lubridate)
+
+preprocessing_path <- file.path(
+  "..", "ultimate_validation", "ultimate_validation_preprocessing.Rmd"
+)
+if (!file.exists(preprocessing_path)) {
+  stop("Preprocessing document not found: ", preprocessing_path)
+}
+preprocessing_lines <- readLines(preprocessing_path, warn = FALSE)
+cohort_end_line <- grep("^# Preprocessed cohort", preprocessing_lines)[1]
+if (is.na(cohort_end_line)) {
+  stop("The heading '# Preprocessed cohort' was not found.")
+}
+
+preprocessing_code_file <- tempfile(fileext = ".R")
+invisible(knitr::purl(
+  text = preprocessing_lines[seq_len(cohort_end_line - 1L)],
+  output = preprocessing_code_file,
+  documentation = 0L,
+  quiet = TRUE
+))
+
+preprocessing_env <- new.env(parent = globalenv())
+# The preprocessing code opens a table in RStudio; it is not needed here.
+preprocessing_env$View <- function(...) invisible(NULL)
+invisible(capture.output(
+  suppressMessages(suppressWarnings(
+    source(preprocessing_code_file, local = preprocessing_env, echo = FALSE)
+  ))
+))
+retrascore_cohort <- preprocessing_env$retrascore_cohort
+if (is.null(retrascore_cohort)) {
+  stop("The preprocessing code did not create 'retrascore_cohort'.")
+}
+```
+
+```{r setup-data}
+outcome_variable <- "mortality_30d"
+
+# The same 11 non-anatomical candidates and 6 anatomical regions used in the
+# variable-selection analysis.
+non_anatomical <- c(
+  "age_category",
+  "preinjury_antithrombotic",
+  "prehospital_intubation",
+  "high_risk_mechanism",
+  "pupils",
+  "gcs_le_8",
+  "hemodynamic_failure",
+  "respiratory_failure",
+  "coagulopathy_24h",
+  "mechanical_ventilation",
+  "massive_hemorrhage"
+)
+
+regions_df <- data.frame(
+  key = c(
+    "head", "upper_extremity", "thorax", "abdomen", "lower_extremity", "external"
+  ),
+  label = c(
+    "Head", "Upper extremity", "Thorax", "Abdomen",
+    "Lower extremity (incl. pelvis)", "External"
+  ),
+  ais_var = c(
+    "head_ais", "upper_extremity_ais", "thorax_ais", "abdomen_ais",
+    "lower_extremity_incl_pelvis_ais", "external_ais"
+  ),
+  stringsAsFactors = FALSE
+)
+
+needed_variables <- c(
+  "row_id", outcome_variable, non_anatomical, regions_df$ais_var
+)
+if (!all(needed_variables %in% names(retrascore_cohort))) {
+  stop(
+    "Missing variables: ",
+    paste(setdiff(needed_variables, names(retrascore_cohort)), collapse = ", ")
+  )
+}
+
+# Derived severity variables for every region:
+#   <key>_ge3, <key>_ge4 : Yes if regional AIS >= 3 (or >= 4), otherwise No
+add_derived_columns <- function(data) {
+  for (i in seq_len(nrow(regions_df))) {
+    ais <- data[[regions_df$ais_var[i]]]
+    for (cutoff in 3:4) {
+      data[[paste0(regions_df$key[i], "_ge", cutoff)]] <- factor(
+        ifelse(ais >= cutoff, "Yes", "No"),
+        levels = c("No", "Yes")
+      )
+    }
+  }
+  data
+}
+
+# Complete cases for the outcome and all candidate predictors (same patients as
+# in the variable-selection analysis), all years of the export.
+cutoff_data <- retrascore_cohort[
+  complete.cases(retrascore_cohort[, needed_variables, drop = FALSE]),
+  needed_variables,
+  drop = FALSE
+]
+cutoff_data <- add_derived_columns(droplevels(cutoff_data))
+analysis_data <- cutoff_data
+if (nrow(analysis_data) == 0L) {
+  stop("The analysis sample is empty.")
+}
+y_outcome <- analysis_data[[outcome_variable]]
+
+knitr::kable(
+  data.frame(
+    Sample = "All years of the export",
+    Patients = nrow(analysis_data),
+    `Deaths within 30 days` = sum(y_outcome),
+    `Mortality (%)` = round(100 * mean(y_outcome), 1),
+    check.names = FALSE
+  ),
+  align = c("l", "r", "r", "r"),
+  caption = "Analysis sample (complete cases)"
+)
+
+fmt_p <- function(p) format.pval(p, digits = 3, eps = 0.001)
+```
+
+# 2. Mortality by AIS level in each region
+
+If AIS 4 is a better cutoff than AIS 3, mortality should rise clearly between 3
+and 4 and not between 2 and 3. The table shows deaths / patients (30-day
+mortality) at each AIS level; the figure shows the same with 95% Wilson
+confidence intervals (levels with fewer than 10 patients are not drawn). Dotted
+lines mark the two candidate cutoffs.
+
+```{r mortality-by-level}
+mortality_by_level <- do.call(rbind, lapply(seq_len(nrow(regions_df)), function(i) {
+  ais <- analysis_data[[regions_df$ais_var[i]]]
+  do.call(rbind, lapply(0:6, function(level) {
+    in_level <- ais == level
+    n <- sum(in_level)
+    d <- sum(y_outcome[in_level])
+    ci <- if (n > 0L) {
+      suppressWarnings(prop.test(d, n, correct = FALSE)$conf.int)
+    } else {
+      c(NA_real_, NA_real_)
+    }
+    data.frame(
+      Region = regions_df$label[i],
+      AIS = level,
+      N = n,
+      Deaths = d,
+      Mortality = if (n > 0L) 100 * d / n else NA_real_,
+      Lower = 100 * ci[1],
+      Upper = 100 * ci[2],
+      stringsAsFactors = FALSE
+    )
+  }))
+}))
+
+mortality_wide <- sapply(regions_df$label, function(region_label) {
+  rows <- mortality_by_level[mortality_by_level$Region == region_label, ]
+  ifelse(
+    rows$N == 0L,
+    "-",
+    sprintf("%d/%d (%.1f%%)", rows$Deaths, rows$N, rows$Mortality)
+  )
+})
+mortality_wide <- data.frame(`Regional AIS` = 0:6, mortality_wide, check.names = FALSE)
+
+knitr::kable(
+  mortality_wide,
+  align = c("c", rep("r", nrow(regions_df))),
+  caption = "30-day deaths / patients (mortality) by regional AIS level, all years"
+)
+```
+
+```{r mortality-plot, fig.width=11, fig.height=6.5, fig.cap="30-day mortality by regional AIS level (all years, same y axis in all panels). Dotted lines: candidate cutoffs >= 3 (between 2 and 3) and >= 4 (between 3 and 4)."}
+# Same y axis in every panel so that regions can be compared directly.
+plotted_levels <- mortality_by_level[mortality_by_level$N >= 10L, , drop = FALSE]
+common_ylim <- c(0, max(plotted_levels$Upper, na.rm = TRUE))
+
+old_par <- par(mfrow = c(2, 3), mar = c(4, 4, 3, 1))
+for (region_label in regions_df$label) {
+  rows <- mortality_by_level[
+    mortality_by_level$Region == region_label & mortality_by_level$N >= 10L, ,
+    drop = FALSE
+  ]
+  if (nrow(rows) == 0L) {
+    next
+  }
+  plot(
+    rows$AIS, rows$Mortality,
+    type = "b", pch = 19,
+    xlim = c(0, 6), ylim = common_ylim,
+    xlab = "Regional AIS", ylab = "30-day mortality (%)",
+    main = region_label
+  )
+  segments(rows$AIS, rows$Lower, rows$AIS, rows$Upper)
+  abline(v = c(2.5, 3.5), lty = 3, col = "grey50")
+}
+par(old_par)
+```
+
+## Mortality by AIS level, alone or together with another region
+
+Same figure, now with six lines per panel. In each panel (region) the patients
+injured in that region (AIS 1-6) are split in these groups:
+
+* **Only this region**: no other region has any injury (AIS 0 in the other five).
+* **+ Head, + Upper extremity, + Thorax, + Abdomen, + Lower extremity,
+  + External**: the other region named has an injury (AIS >= 1), whatever its
+  severity and whatever happens in the remaining regions.
+
+The "+" groups overlap: a patient with injuries in the region plus head and
+thorax appears in both the "+ Head" and the "+ Thorax" lines. Colours are the
+same for the same region in every panel. Levels with fewer than 10 patients in a
+group are not drawn, the lines are shifted slightly horizontally so that the
+confidence intervals do not overlap, and the y axis is the same in all panels.
+AIS 0 is not drawn because the lines refer to patients injured in the region.
+
+```{r mortality-by-level-group}
+region_colours <- c(
+  head = "#D55E00", upper_extremity = "#0072B2", thorax = "#009E73",
+  abdomen = "#CC79A7", lower_extremity = "#E69F00", external = "#56B4E9"
+)
+ais_matrix <- as.matrix(analysis_data[, regions_df$ais_var])
+region_injured <- ais_matrix > 0
+
+# Groups of patients for region i: injured only there, or together with each of
+# the other five regions.
+build_groups <- function(i) {
+  others <- setdiff(seq_len(nrow(regions_df)), i)
+  groups <- list(
+    `Only this region` = rowSums(region_injured[, others, drop = FALSE]) == 0
+  )
+  for (j in others) {
+    groups[[paste0("+ ", regions_df$label[j])]] <- region_injured[, j]
+  }
+  groups
+}
+
+mortality_by_level_group <- do.call(rbind, lapply(seq_len(nrow(regions_df)), function(i) {
+  ais <- analysis_data[[regions_df$ais_var[i]]]
+  groups <- build_groups(i)
+  do.call(rbind, lapply(names(groups), function(group_name) {
+    do.call(rbind, lapply(1:6, function(level) {
+      in_cell <- ais == level & groups[[group_name]]
+      n <- sum(in_cell)
+      d <- sum(y_outcome[in_cell])
+      ci <- if (n > 0L) {
+        suppressWarnings(prop.test(d, n, correct = FALSE)$conf.int)
+      } else {
+        c(NA_real_, NA_real_)
+      }
+      data.frame(
+        Region = regions_df$label[i],
+        Group = group_name,
+        AIS = level,
+        N = n,
+        Deaths = d,
+        Mortality = if (n > 0L) 100 * d / n else NA_real_,
+        Lower = 100 * ci[1],
+        Upper = 100 * ci[2],
+        stringsAsFactors = FALSE
+      )
+    }))
+  }))
+}))
+
+group_size_matrix <- t(sapply(seq_len(nrow(regions_df)), function(i) {
+  ais <- analysis_data[[regions_df$ais_var[i]]]
+  groups <- build_groups(i)
+  sizes <- setNames(
+    rep("-", 1 + nrow(regions_df)),
+    c("Only this region", paste0("+ ", regions_df$label))
+  )
+  for (group_name in names(groups)) {
+    sizes[group_name] <- as.character(sum(ais > 0 & groups[[group_name]]))
+  }
+  c(`Injured in this region` = as.character(sum(ais > 0)), sizes)
+}))
+
+knitr::kable(
+  data.frame(Region = regions_df$label, group_size_matrix, check.names = FALSE),
+  align = c("l", rep("r", ncol(group_size_matrix))),
+  caption = "Patients injured in each region (AIS 1-6) in each group (the groups with '+' overlap; all years)"
+)
+```
+
+```{r mortality-plot-group, fig.width=12, fig.height=7.5, fig.cap="30-day mortality by regional AIS level, with the injury alone or together with each other region (all years, same y axis in all panels). Dotted lines: candidate cutoffs >= 3 (between 2 and 3) and >= 4 (between 3 and 4)."}
+plotted_group_levels <- mortality_by_level_group[mortality_by_level_group$N >= 10L, , drop = FALSE]
+group_ylim <- c(0, max(plotted_group_levels$Upper, na.rm = TRUE))
+x_offsets <- seq(-0.15, 0.15, length.out = 6)
+
+old_par <- par(mfrow = c(2, 3), mar = c(4, 4, 3, 1))
+for (i in seq_len(nrow(regions_df))) {
+  region_label <- regions_df$label[i]
+  others <- setdiff(seq_len(nrow(regions_df)), i)
+  group_names <- c("Only this region", paste0("+ ", regions_df$label[others]))
+  group_colours <- c("black", unname(region_colours[regions_df$key[others]]))
+
+  plot(
+    NA, xlim = c(0.5, 6.5), ylim = group_ylim, xaxt = "n",
+    xlab = "Regional AIS", ylab = "30-day mortality (%)",
+    main = region_label
+  )
+  axis(1, at = 1:6)
+  abline(v = c(2.5, 3.5), lty = 3, col = "grey50")
+  for (g in seq_along(group_names)) {
+    rows <- mortality_by_level_group[
+      mortality_by_level_group$Region == region_label &
+        mortality_by_level_group$Group == group_names[g] &
+        mortality_by_level_group$N >= 10L, ,
+      drop = FALSE
+    ]
+    if (nrow(rows) == 0L) {
+      next
+    }
+    x_values <- rows$AIS + x_offsets[g]
+    lines(x_values, rows$Mortality, type = "b", pch = 19, cex = 0.7, col = group_colours[g])
+    segments(x_values, rows$Lower, x_values, rows$Upper, col = group_colours[g])
+  }
+  legend(
+    "topleft", legend = group_names, col = group_colours,
+    pch = 19, lty = 1, bty = "n", cex = 0.7
+  )
+}
+par(old_par)
+```
+
+## The same figure, one graph per region
+
+The six panels above are repeated here one by one, larger. Each graph uses its
+own y axis (to see the detail of each region); set `use_common_ylim <- TRUE` in
+the next chunk to use the same axis in all of them.
+
+```{r plot-region-function}
+use_common_ylim <- FALSE
+
+plot_region_groups <- function(i) {
+  # Objects created by the chunks above (run the document from the top, or all
+  # chunks in order, before calling this function).
+  needed_objects <- c("mortality_by_level_group", "x_offsets", "region_colours", "group_ylim")
+  missing_objects <- needed_objects[!vapply(needed_objects, exists, logical(1))]
+  if (length(missing_objects) > 0L) {
+    stop("Run the previous chunks first. Missing objects: ", paste(missing_objects, collapse = ", "))
+  }
+  if (!all(c("Region", "Group", "N", "Upper") %in% names(mortality_by_level_group))) {
+    stop("'mortality_by_level_group' comes from an older version of the chunk; ",
+         "re-run the chunk 'mortality-by-level-group'.")
+  }
+
+  region_label <- regions_df$label[i]
+  others <- setdiff(seq_len(nrow(regions_df)), i)
+  group_names <- c("Only this region", paste0("+ ", regions_df$label[others]))
+  group_colours <- c("black", unname(region_colours[regions_df$key[others]]))
+
+  region_rows <- mortality_by_level_group[
+    mortality_by_level_group$Region == region_label &
+      mortality_by_level_group$N >= 10L, ,
+    drop = FALSE
+  ]
+  if (nrow(region_rows) == 0L) {
+    stop("No group with at least 10 patients for ", region_label)
+  }
+  region_ylim <- if (use_common_ylim) {
+    group_ylim
+  } else {
+    c(0, max(region_rows$Upper, na.rm = TRUE))
+  }
+
+  old_par <- par(mar = c(4.5, 4.5, 3, 1))
+  on.exit(par(old_par))
+  plot(
+    NA, xlim = c(0.5, 6.5), ylim = region_ylim, xaxt = "n",
+    xlab = paste0("Regional AIS (", region_label, ")"),
+    ylab = "30-day mortality (%)",
+    main = region_label
+  )
+  axis(1, at = 1:6)
+  abline(v = c(2.5, 3.5), lty = 3, col = "grey50")
+  for (g in seq_along(group_names)) {
+    rows <- region_rows[region_rows$Group == group_names[g], , drop = FALSE]
+    if (nrow(rows) == 0L) {
+      next
+    }
+    x_values <- rows$AIS + x_offsets[g]
+    lines(x_values, rows$Mortality, type = "b", pch = 19, cex = 0.9, col = group_colours[g])
+    segments(x_values, rows$Lower, x_values, rows$Upper, col = group_colours[g])
+  }
+  legend(
+    "topleft", legend = group_names, col = group_colours,
+    pch = 19, lty = 1, bty = "n", cex = 0.85
+  )
+}
+```
+
+### Head
+
+```{r plot-head, fig.width=8, fig.height=5.5, fig.cap="Head: 30-day mortality by AIS level, alone or together with another region. Dotted lines: cutoffs >= 3 and >= 4."}
+plot_region_groups(1)
+```
+
+### Upper extremity
+
+```{r plot-upper-extremity, fig.width=8, fig.height=5.5, fig.cap="Upper extremity: 30-day mortality by AIS level, alone or together with another region. Dotted lines: cutoffs >= 3 and >= 4."}
+plot_region_groups(2)
+```
+
+### Thorax
+
+```{r plot-thorax, fig.width=8, fig.height=5.5, fig.cap="Thorax: 30-day mortality by AIS level, alone or together with another region. Dotted lines: cutoffs >= 3 and >= 4."}
+plot_region_groups(3)
+```
+
+### Abdomen
+
+```{r plot-abdomen, fig.width=8, fig.height=5.5, fig.cap="Abdomen: 30-day mortality by AIS level, alone or together with another region. Dotted lines: cutoffs >= 3 and >= 4."}
+plot_region_groups(4)
+```
+
+### Lower extremity (incl. pelvis)
+
+```{r plot-lower-extremity, fig.width=8, fig.height=5.5, fig.cap="Lower extremity: 30-day mortality by AIS level, alone or together with another region. Dotted lines: cutoffs >= 3 and >= 4."}
+plot_region_groups(5)
+```
+
+### External
+
+```{r plot-external, fig.width=8, fig.height=5.5, fig.cap="External: 30-day mortality by AIS level, alone or together with another region. Dotted lines: cutoffs >= 3 and >= 4."}
+plot_region_groups(6)
+```
+
+## By age: under 65 and 65 or more
+
+The six-panel figure is repeated twice: first for patients younger than 65 years
+and then for patients aged 65 or more (age in years, from the registry). The
+groups of each panel are the same as above. Both figures use the same y axis, so
+that they can be compared directly. Patients with unknown age are left out.
+
+```{r age-functions}
+patient_age <- retrascore_cohort$age[match(analysis_data$row_id, retrascore_cohort$row_id)]
+age_groups <- list(
+  `Younger than 65 years` = !is.na(patient_age) & patient_age < 65,
+  `Aged 65 years or more` = !is.na(patient_age) & patient_age >= 65
+)
+
+group_mortality_table <- function(keep) {
+  do.call(rbind, lapply(seq_len(nrow(regions_df)), function(i) {
+    ais <- analysis_data[[regions_df$ais_var[i]]]
+    groups <- build_groups(i)
+    do.call(rbind, lapply(names(groups), function(group_name) {
+      do.call(rbind, lapply(1:6, function(level) {
+        in_cell <- keep & ais == level & groups[[group_name]]
+        n <- sum(in_cell)
+        d <- sum(y_outcome[in_cell])
+        ci <- if (n > 0L) {
+          suppressWarnings(prop.test(d, n, correct = FALSE)$conf.int)
+        } else {
+          c(NA_real_, NA_real_)
+        }
+        data.frame(
+          Region = regions_df$label[i],
+          Group = group_name,
+          AIS = level,
+          N = n,
+          Deaths = d,
+          Mortality = if (n > 0L) 100 * d / n else NA_real_,
+          Lower = 100 * ci[1],
+          Upper = 100 * ci[2],
+          stringsAsFactors = FALSE
+        )
+      }))
+    }))
+  }))
+}
+
+group_size_table <- function(keep) {
+  size_matrix <- t(sapply(seq_len(nrow(regions_df)), function(i) {
+    ais <- analysis_data[[regions_df$ais_var[i]]]
+    groups <- build_groups(i)
+    sizes <- setNames(
+      rep("-", 1 + nrow(regions_df)),
+      c("Only this region", paste0("+ ", regions_df$label))
+    )
+    for (group_name in names(groups)) {
+      sizes[group_name] <- as.character(sum(keep & ais > 0 & groups[[group_name]]))
+    }
+    c(`Injured in this region` = as.character(sum(keep & ais > 0)), sizes)
+  }))
+  data.frame(Region = regions_df$label, size_matrix, check.names = FALSE)
+}
+
+plot_six_panels <- function(group_table, y_limit, figure_title) {
+  old_par <- par(mfrow = c(2, 3), mar = c(4, 4, 3, 1), oma = c(0, 0, 2.5, 0))
+  on.exit(par(old_par))
+  for (i in seq_len(nrow(regions_df))) {
+    region_label <- regions_df$label[i]
+    others <- setdiff(seq_len(nrow(regions_df)), i)
+    group_names <- c("Only this region", paste0("+ ", regions_df$label[others]))
+    group_colours <- c("black", unname(region_colours[regions_df$key[others]]))
+
+    plot(
+      NA, xlim = c(0.5, 6.5), ylim = y_limit, xaxt = "n",
+      xlab = "Regional AIS", ylab = "30-day mortality (%)",
+      main = region_label
+    )
+    axis(1, at = 1:6)
+    abline(v = c(2.5, 3.5), lty = 3, col = "grey50")
+    for (g in seq_along(group_names)) {
+      rows <- group_table[
+        group_table$Region == region_label &
+          group_table$Group == group_names[g] &
+          group_table$N >= 10L, ,
+        drop = FALSE
+      ]
+      if (nrow(rows) == 0L) {
+        next
+      }
+      x_values <- rows$AIS + x_offsets[g]
+      lines(x_values, rows$Mortality, type = "b", pch = 19, cex = 0.7, col = group_colours[g])
+      segments(x_values, rows$Lower, x_values, rows$Upper, col = group_colours[g])
+    }
+    legend(
+      "topleft", legend = group_names, col = group_colours,
+      pch = 19, lty = 1, bty = "n", cex = 0.7
+    )
+  }
+  mtext(figure_title, outer = TRUE, font = 2, cex = 1.2)
+}
+
+age_tables <- lapply(age_groups, group_mortality_table)
+age_ylim <- c(0, max(vapply(age_tables, function(group_table) {
+  max(group_table$Upper[group_table$N >= 10L], na.rm = TRUE)
+}, numeric(1))))
+
+age_summary <- data.frame(
+  `Age group` = names(age_groups),
+  Patients = vapply(age_groups, sum, numeric(1)),
+  `Deaths within 30 days` = vapply(age_groups, function(keep) sum(y_outcome[keep]), numeric(1)),
+  `Mortality (%)` = vapply(age_groups, function(keep) round(100 * mean(y_outcome[keep]), 1), numeric(1)),
+  check.names = FALSE,
+  row.names = NULL
+)
+knitr::kable(
+  age_summary,
+  align = c("l", "r", "r", "r"),
+  caption = sprintf("Patients by age group (%d patients with unknown age excluded)", sum(is.na(patient_age)))
+)
+```
+
+### Patients younger than 65 years
+
+```{r age-under-65-sizes}
+knitr::kable(
+  group_size_table(age_groups[[1]]),
+  align = c("l", rep("r", 8)),
+  caption = "Younger than 65 years: patients injured in each region (AIS 1-6) in each group (groups with '+' overlap)"
+)
+```
+
+```{r plot-age-under-65, fig.width=12, fig.height=7.5, fig.cap="Patients younger than 65 years: 30-day mortality by regional AIS level, alone or together with another region (same y axis as the 65-or-more figure). Dotted lines: cutoffs >= 3 and >= 4."}
+plot_six_panels(age_tables[[1]], age_ylim, "Younger than 65 years")
+```
+
+### Patients aged 65 years or more
+
+```{r age-65-plus-sizes}
+knitr::kable(
+  group_size_table(age_groups[[2]]),
+  align = c("l", rep("r", 8)),
+  caption = "Aged 65 years or more: patients injured in each region (AIS 1-6) in each group (groups with '+' overlap)"
+)
+```
+
+```{r plot-age-65-plus, fig.width=12, fig.height=7.5, fig.cap="Patients aged 65 years or more: 30-day mortality by regional AIS level, alone or together with another region (same y axis as the under-65 figure). Dotted lines: cutoffs >= 3 and >= 4."}
+plot_six_panels(age_tables[[2]], age_ylim, "Aged 65 years or more")
+```
+
+# 3. Mortality by number of regions and by highest AIS (any region)
+
+Here the region is not taken into account: each patient is described by how many
+of the six regions are injured, and by the highest AIS among the six regions.
+All years and all patients are used. A region counts as injured when its AIS is
+1 or more. The six regions are head, upper extremity, thorax, abdomen, lower
+extremity (including pelvis) and external. Patients with AIS 0 in all six regions
+(no injury recorded in any of them) are shown in the tables but not in the
+figures; their meaning is doubtful, since an empty AIS is coded as 0.
+
+```{r summary-functions}
+mortality_by_value <- function(values, levels_to_use) {
+  do.call(rbind, lapply(levels_to_use, function(level) {
+    in_level <- values == level
+    n <- sum(in_level)
+    d <- sum(y_outcome[in_level])
+    ci <- if (n > 0L) {
+      suppressWarnings(prop.test(d, n, correct = FALSE)$conf.int)
+    } else {
+      c(NA_real_, NA_real_)
+    }
+    data.frame(
+      Level = level,
+      N = n,
+      Deaths = d,
+      Mortality = if (n > 0L) 100 * d / n else NA_real_,
+      Lower = 100 * ci[1],
+      Upper = 100 * ci[2]
+    )
+  }))
+}
+
+plot_mortality_by_value <- function(summary_table, x_label, figure_title) {
+  drawn <- summary_table[summary_table$N >= 10L & summary_table$Level >= 1, , drop = FALSE]
+  old_par <- par(mar = c(4.5, 4.5, 3, 1))
+  on.exit(par(old_par))
+  plot(
+    NA, xlim = c(min(drawn$Level) - 0.5, max(drawn$Level) + 0.5),
+    ylim = c(0, max(drawn$Upper) * 1.1), xaxt = "n",
+    xlab = x_label, ylab = "30-day mortality (%)", main = figure_title
+  )
+  axis(1, at = drawn$Level)
+  lines(drawn$Level, drawn$Mortality, type = "b", pch = 19)
+  segments(drawn$Level, drawn$Lower, drawn$Level, drawn$Upper)
+  text(drawn$Level, drawn$Upper, labels = paste0("n=", drawn$N), pos = 3, cex = 0.75)
+}
+
+format_summary_table <- function(summary_table, level_name) {
+  result <- data.frame(
+    summary_table$Level,
+    summary_table$N,
+    summary_table$Deaths,
+    round(summary_table$Mortality, 1),
+    ifelse(
+      is.na(summary_table$Lower), "-",
+      sprintf("%.1f-%.1f", summary_table$Lower, summary_table$Upper)
+    )
+  )
+  names(result) <- c(
+    level_name, "Patients", "Deaths within 30 days", "Mortality (%)", "95% CI (Wilson)"
+  )
+  result
+}
+
+all_ais_matrix <- as.matrix(analysis_data[, regions_df$ais_var])
+region_count <- rowSums(all_ais_matrix > 0)
+highest_ais <- apply(all_ais_matrix, 1, max)
+```
+
+## 3.1 Mortality by number of injured regions
+
+```{r by-number-of-regions}
+mortality_by_region_count <- mortality_by_value(region_count, 0:6)
+
+knitr::kable(
+  format_summary_table(mortality_by_region_count, "Injured regions"),
+  align = c("c", "r", "r", "r", "r"),
+  caption = "30-day mortality by number of injured regions (AIS >= 1), all years"
+)
+```
+
+```{r plot-number-of-regions, fig.width=8, fig.height=5.5, fig.cap="30-day mortality by number of injured regions (AIS >= 1), whichever they are. Bars: 95% Wilson confidence intervals; groups with fewer than 10 patients are not drawn."}
+plot_mortality_by_value(
+  mortality_by_region_count, "Number of injured regions", "Mortality by number of injured regions"
+)
+```
+
+## 3.2 Mortality by the highest AIS
+
+The highest AIS is the maximum of the six regional AIS values of each patient,
+whichever region it belongs to.
+
+```{r by-highest-ais}
+mortality_by_highest_ais <- mortality_by_value(highest_ais, 0:6)
+
+knitr::kable(
+  format_summary_table(mortality_by_highest_ais, "Highest AIS"),
+  align = c("c", "r", "r", "r", "r"),
+  caption = "30-day mortality by the highest regional AIS of the patient, all years"
+)
+```
+
+```{r plot-highest-ais, fig.width=8, fig.height=5.5, fig.cap="30-day mortality by the highest regional AIS of the patient, whichever region it belongs to. Bars: 95% Wilson confidence intervals; groups with fewer than 10 patients are not drawn."}
+plot_mortality_by_value(
+  mortality_by_highest_ais, "Highest AIS (any region)", "Mortality by highest AIS"
+)
+```
