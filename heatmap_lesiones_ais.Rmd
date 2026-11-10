@@ -54,7 +54,7 @@ output_dir <- "outputs_heatmap_lesiones_ais"
 
 year_range <- c(2015L, 2025L)   # año del trauma
 minimum_age <- 18               # se eliminan los menores de 18 años
-severe_threshold <- 2           # lesión grave: AIS máximo de la región >= 3
+severe_threshold <- 1           # lesión grave: AIS máximo de la región >= 3
 number_of_lesions <- 32L
 
 region_names <- c(

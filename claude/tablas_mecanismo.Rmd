@@ -155,6 +155,221 @@ cat("Excluidos por intencionalidad desconocida/vacía:",
     sum(is.na(df$intencionalidad_3) & !is.na(df$muerte)), "\n")
 ```
 
+# Mecanismo de las autólisis
+
+Entre los pacientes con intencionalidad `intencionado : autolisis` se describe el mecanismo de trauma: número de casos, porcentaje sobre el total de autólisis, exitus y mortalidad por mecanismo. Se aplican los mismos criterios de mortalidad (`evolucion_uci`) y limpieza de texto que en las secciones anteriores.
+
+```{r autolisis-mecanismo}
+datos_auto <- df[!is.na(df$muerte) &
+                   !is.na(df$mecanismo_limpio) &
+                   df$intencionalidad_3 %in% "Autolisis", ]
+
+n_auto      <- tapply(datos_auto$muerte, datos_auto$mecanismo_limpio, length)
+exitus_auto <- tapply(datos_auto$muerte, datos_auto$mecanismo_limpio, sum)
+
+tabla_auto <- data.frame(
+  Mecanismo = names(n_auto),
+  N = as.integer(n_auto),
+  Pct_autolisis = round(100 * as.numeric(n_auto) / nrow(datos_auto), 1),
+  Exitus = as.integer(exitus_auto),
+  Mortalidad_pct = round(100 * as.numeric(exitus_auto) / as.numeric(n_auto), 1)
+)
+tabla_auto <- tabla_auto[order(-tabla_auto$N), ]
+
+tabla_auto <- rbind(
+  tabla_auto,
+  data.frame(
+    Mecanismo = "TOTAL",
+    N = nrow(datos_auto),
+    Pct_autolisis = 100,
+    Exitus = sum(datos_auto$muerte),
+    Mortalidad_pct = round(100 * mean(datos_auto$muerte), 1)
+  )
+)
+rownames(tabla_auto) <- NULL
+
+knitr::kable(
+  tabla_auto,
+  col.names = c("Mecanismo", "n", "% de autólisis", "Exitus (n)", "Mortalidad (%)"),
+  align = c("l", "r", "r", "r", "r")
+)
+```
+
+```{r exclusiones-autolisis}
+auto_todas <- df[df$intencionalidad_3 %in% "Autolisis", ]
+cat("Autólisis totales:", nrow(auto_todas), "\n")
+cat("Excluidas por evolucion_uci vacío:", sum(is.na(auto_todas$muerte)), "\n")
+cat("Excluidas por mecanismo vacío:",
+    sum(is.na(auto_todas$mecanismo_limpio) & !is.na(auto_todas$muerte)), "\n")
+```
+
+# Regiones afectadas y gravedad (MAIS) en el top 5 de mecanismos de autólisis
+
+Para los cinco mecanismos más frecuentes entre las autólisis se describe, por región anatómica, cuántos pacientes tienen lesión y su gravedad según el MAIS regional. La correspondencia entre variables y regiones es: `mais1` = cabeza, `mais2` = extremidad superior, `mais3` = tórax, `mais4` = abdomen, `mais5` = extremidad inferior y `mais6` = externa/térmica. Un MAIS vacío se interpreta como ausencia de lesión en esa región, y un paciente puede contribuir a varias regiones. Se muestran los pacientes con lesión (MAIS ≥ 1), su porcentaje sobre los pacientes del mecanismo, el MAIS medio y mediano entre los lesionados, y el número y porcentaje con lesión grave (MAIS ≥ 3).
+
+```{r top5-regiones}
+regiones_mais <- c(
+  "Cabeza"          = "mais1",
+  "Ext. superior"   = "mais2",
+  "Tórax"           = "mais3",
+  "Abdomen"         = "mais4",
+  "Ext. inferior"   = "mais5",
+  "Externa/térmica" = "mais6"
+)
+
+# Top 5 por número de casos (mismos pacientes que la tabla de mecanismos de autólisis)
+top5 <- head(tabla_auto$Mecanismo[tabla_auto$Mecanismo != "TOTAL"], 5)
+
+tabla_regiones <- do.call(rbind, lapply(top5, function(m) {
+  pac <- datos_auto[datos_auto$mecanismo_limpio == m, ]
+  do.call(rbind, lapply(names(regiones_mais), function(r) {
+    mais <- suppressWarnings(as.numeric(as.character(pac[[regiones_mais[[r]]]])))
+    mais <- mais[!is.na(mais) & mais >= 1]
+    data.frame(
+      Mecanismo   = m,
+      N_mecanismo = nrow(pac),
+      Region      = r,
+      Con_lesion  = length(mais),
+      Pct_lesion  = round(100 * length(mais) / nrow(pac), 1),
+      MAIS_medio  = if (length(mais)) round(mean(mais), 2) else NA_real_,
+      MAIS_mediana = if (length(mais)) median(mais) else NA_real_,
+      MAIS_ge3_n  = sum(mais >= 3),
+      MAIS_ge3_pct = round(100 * sum(mais >= 3) / nrow(pac), 1)
+    )
+  }))
+}))
+rownames(tabla_regiones) <- NULL
+
+knitr::kable(
+  tabla_regiones[, -2],
+  col.names = c("Mecanismo", "Región", "Con lesión (n)", "% de pacientes",
+                "MAIS medio", "MAIS mediana", "MAIS ≥ 3 (n)", "MAIS ≥ 3 (% de pacientes)"),
+  align = c("l", "l", "r", "r", "r", "r", "r", "r")
+)
+```
+
+## Distribución del MAIS por región
+
+```{r top5-regiones-distribucion}
+dist_mais <- do.call(rbind, lapply(top5, function(m) {
+  pac <- datos_auto[datos_auto$mecanismo_limpio == m, ]
+  do.call(rbind, lapply(names(regiones_mais), function(r) {
+    mais <- suppressWarnings(as.numeric(as.character(pac[[regiones_mais[[r]]]])))
+    fila <- sapply(1:6, function(k) sum(mais == k, na.rm = TRUE))
+    data.frame(Mecanismo = m, Region = r, t(fila))
+  }))
+}))
+names(dist_mais)[3:8] <- paste0("MAIS ", 1:6)
+rownames(dist_mais) <- NULL
+
+knitr::kable(dist_mais, align = c("l", "l", rep("r", 6)))
+```
+
+## Gráficos por región
+
+Paleta: una sola gama azul ordenada de claro a oscuro para el grado MAIS (a más oscuro, más grave), con un hueco del color del fondo entre segmentos.
+
+```{r top5-graficos-preparacion, message=FALSE}
+library(ggplot2)
+
+tinta   <- "#1a1a19"
+tinta_2 <- "#5f5e5a"
+fondo   <- "#fcfcfb"
+cols_mais <- c("MAIS 1" = "#86b6ef", "MAIS 2" = "#5598e7", "MAIS 3" = "#2a78d6",
+               "MAIS 4" = "#1c5cab", "MAIS 5" = "#104281", "MAIS 6" = "#0d366b")
+
+tema_mais <- theme_minimal(base_size = 11) +
+  theme(
+    plot.background  = element_rect(fill = fondo, colour = NA),
+    panel.background = element_rect(fill = fondo, colour = NA),
+    panel.grid.major.y = element_blank(),
+    panel.grid.minor   = element_blank(),
+    panel.grid.major.x = element_line(colour = "#e6e5e1", linewidth = 0.3),
+    strip.text   = element_text(face = "bold", colour = tinta, hjust = 0),
+    axis.text    = element_text(colour = tinta_2),
+    axis.title   = element_text(colour = tinta_2),
+    plot.title   = element_text(colour = tinta, face = "bold"),
+    plot.subtitle = element_text(colour = tinta_2),
+    legend.position = "top",
+    legend.title = element_blank(),
+    legend.text  = element_text(colour = tinta_2)
+  )
+
+n_mec_top5 <- setNames(tabla_auto$N[match(top5, tabla_auto$Mecanismo)], top5)
+etiqueta_mec <- paste0(top5, " (n=", n_mec_top5, ")")
+names(etiqueta_mec) <- top5
+orden_regiones <- names(regiones_mais)
+```
+
+### Distribución del MAIS en cada región
+
+Cada panel es una región anatómica. Cada barra suma 100 % de los pacientes **con lesión en esa región** para ese mecanismo; el número a la derecha es el n de lesionados. Con n pequeño (por ejemplo arma de fuego o atropello) las proporciones son poco estables.
+
+```{r top5-grafico-regiones, fig.width=11, fig.height=8}
+long_mais <- do.call(rbind, lapply(seq_len(nrow(dist_mais)), function(i) {
+  data.frame(
+    Mecanismo = dist_mais$Mecanismo[i],
+    Region    = dist_mais$Region[i],
+    MAIS      = paste0("MAIS ", 1:6),
+    n         = as.numeric(dist_mais[i, 3:8])
+  )
+}))
+long_mais$tot <- ave(long_mais$n, long_mais$Mecanismo, long_mais$Region, FUN = sum)
+long_mais <- long_mais[long_mais$tot > 0, ]
+long_mais$pct <- 100 * long_mais$n / long_mais$tot
+long_mais$MAIS <- factor(long_mais$MAIS, levels = paste0("MAIS ", 6:1))   # MAIS 1 a la izquierda
+long_mais$Region <- factor(long_mais$Region, levels = orden_regiones)
+long_mais$Mecanismo <- factor(long_mais$Mecanismo, levels = rev(top5))
+
+totales <- unique(long_mais[, c("Mecanismo", "Region", "tot")])
+
+ggplot(long_mais, aes(x = pct, y = Mecanismo, fill = MAIS)) +
+  geom_col(width = 0.65, colour = fondo, linewidth = 0.6) +
+  geom_text(data = totales, aes(x = 101, y = Mecanismo, label = paste0("n=", tot)),
+            inherit.aes = FALSE, hjust = 0, size = 3, colour = tinta_2) +
+  facet_wrap(~ Region, ncol = 2) +
+  scale_fill_manual(values = cols_mais, breaks = paste0("MAIS ", 1:6)) +
+  scale_x_continuous(limits = c(0, 118), breaks = seq(0, 100, 25),
+                     labels = function(x) paste0(x, " %")) +
+  scale_y_discrete(labels = etiqueta_mec) +
+  labs(title = "Gravedad (MAIS) por región en el top 5 de mecanismos de autólisis",
+       subtitle = "Porcentaje de pacientes lesionados en cada región, por grado MAIS",
+       x = NULL, y = NULL) +
+  tema_mais
+```
+
+### Mapa de calor: lesión grave (MAIS ≥ 3)
+
+Resumen en una sola figura. El color es el porcentaje de **todos** los pacientes del mecanismo con MAIS ≥ 3 en esa región; el texto indica el porcentaje y, entre paréntesis, el número de pacientes.
+
+```{r top5-mapa-calor, fig.width=9, fig.height=4.5}
+mc <- tabla_regiones
+mc$Region <- factor(mc$Region, levels = rev(orden_regiones))
+mc$Mecanismo <- factor(mc$Mecanismo, levels = top5)
+mc$etiqueta <- paste0(sprintf("%.0f", mc$MAIS_ge3_pct), " %\n(", mc$MAIS_ge3_n, ")")
+mc$texto_col <- ifelse(mc$MAIS_ge3_pct >= 35, "#ffffff", tinta)
+
+ggplot(mc, aes(x = Mecanismo, y = Region, fill = MAIS_ge3_pct)) +
+  geom_tile(colour = fondo, linewidth = 1) +
+  geom_text(aes(label = etiqueta, colour = texto_col), size = 3.2, lineheight = 0.9) +
+  scale_colour_identity() +
+  scale_fill_gradientn(
+    colours = c("#cde2fb", "#9ec5f4", "#5598e7", "#2a78d6", "#1c5cab", "#0d366b"),
+    limits = c(0, 100), name = "% con MAIS ≥ 3"
+  ) +
+  scale_x_discrete(position = "top", labels = function(x) etiqueta_mec[x]) +
+  labs(title = "Lesión grave (MAIS ≥ 3) por región y mecanismo",
+       subtitle = "Autólisis, top 5 de mecanismos", x = NULL, y = NULL) +
+  tema_mais +
+  theme(panel.grid = element_blank(), legend.position = "right")
+```
+
+```{r top5-regiones-notas}
+cat("Top 5 de mecanismos (n):\n")
+print(setNames(tabla_auto$N[match(top5, tabla_auto$Mecanismo)], top5))
+cat("\nNota: atropello y arma de fuego empatan con 17 casos; el orden entre ambos lo decide el orden de la tabla anterior.\n")
+```
+
 # Pérdida de pacientes por valores ausentes (NA)
 
 Se considera NA una celda vacía o con el texto `NA`/`NAS`. Se muestra la n inicial (pacientes 2020-2025), los menores de 18 años eliminados y la pérdida **secuencial** (pacientes que se van perdiendo al ir aplicando las variables en el orden de la tabla, de modo que un paciente con varios NA solo se cuenta una vez, en la primera variable donde falla). Los traslados a otra UCI/hospital no son NA sino un criterio de exclusión, y se aplican al final.
