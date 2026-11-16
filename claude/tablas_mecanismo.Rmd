@@ -338,6 +338,70 @@ ggplot(long_mais, aes(x = pct, y = Mecanismo, fill = MAIS)) +
   tema_mais
 ```
 
+### Distribución del MAIS en cada mecanismo (regiones en filas)
+
+Misma información que el gráfico anterior pero con los ejes cambiados y **para todos los mecanismos de la cohorte 2020-2025, independientemente de la intencionalidad** (mismos pacientes que la tabla de mortalidad por mecanismo), ordenados por número de casos. Cada panel es un mecanismo y dentro de él hay 6 filas, una por región anatómica. Cada barra suma 100 % de los pacientes **con lesión en esa región**, y el color indica el grado MAIS (a más oscuro, más grave). El número a la derecha es el n de lesionados en esa región; las regiones sin lesionados se muestran vacías con `n=0`. Con n pequeño las proporciones son poco estables.
+
+```{r todos-mecanismos-preparacion}
+tabla_mec_orden <- tabla_mecanismo[tabla_mecanismo$Mecanismo != "TOTAL", ]
+mecanismos_todos <- tabla_mec_orden$Mecanismo[order(-tabla_mec_orden$N)]
+n_mec_todos <- setNames(tabla_mec_orden$N[match(mecanismos_todos, tabla_mec_orden$Mecanismo)],
+                        mecanismos_todos)
+etiqueta_mec_todos <- paste0(mecanismos_todos, " (n=", n_mec_todos, ")")
+
+dist_mais_todos <- do.call(rbind, lapply(mecanismos_todos, function(m) {
+  pac <- datos_tabla[datos_tabla$mecanismo_limpio == m, ]
+  do.call(rbind, lapply(names(regiones_mais), function(r) {
+    mais <- suppressWarnings(as.numeric(as.character(pac[[regiones_mais[[r]]]])))
+    data.frame(
+      Mecanismo = m,
+      Region    = r,
+      MAIS      = paste0("MAIS ", 1:6),
+      n         = sapply(1:6, function(k) sum(mais == k, na.rm = TRUE))
+    )
+  }))
+}))
+
+mec_por_figura <- 4   # 2 x 2 paneles por figura
+grupos_mec <- split(mecanismos_todos,
+                    ceiling(seq_along(mecanismos_todos) / mec_por_figura))
+```
+
+```{r grafico-todos-mecanismos, fig.width=12, fig.height=7.5, out.width="100%"}
+long_mec <- dist_mais_todos
+long_mec$tot <- ave(long_mec$n, long_mec$Mecanismo, long_mec$Region, FUN = sum)
+long_mec$pct <- ifelse(long_mec$tot > 0, 100 * long_mec$n / long_mec$tot, 0)
+long_mec$MAIS <- factor(long_mec$MAIS, levels = paste0("MAIS ", 6:1))    # MAIS 1 a la izquierda
+long_mec$Region <- factor(long_mec$Region, levels = rev(orden_regiones))  # Cabeza arriba
+long_mec$etiqueta <- etiqueta_mec_todos[match(long_mec$Mecanismo, mecanismos_todos)]
+
+for (g in seq_along(grupos_mec)) {
+  datos_g <- long_mec[long_mec$Mecanismo %in% grupos_mec[[g]], ]
+  datos_g$etiqueta <- factor(datos_g$etiqueta,
+                             levels = etiqueta_mec_todos[match(grupos_mec[[g]], mecanismos_todos)])
+  totales_g <- unique(datos_g[, c("etiqueta", "Region", "tot")])
+
+  p <- ggplot(datos_g, aes(x = pct, y = Region, fill = MAIS)) +
+    geom_col(width = 0.7, colour = fondo, linewidth = 0.6) +
+    geom_text(data = totales_g, aes(x = 101, y = Region, label = paste0("n=", tot)),
+              inherit.aes = FALSE, hjust = 0, size = 3.4, colour = tinta_2) +
+    facet_wrap(~ etiqueta, ncol = 2, labeller = label_wrap_gen(40)) +
+    scale_fill_manual(values = cols_mais, breaks = paste0("MAIS ", 1:6)) +
+    scale_x_continuous(limits = c(0, 118), breaks = seq(0, 100, 25),
+                       labels = function(x) paste0(x, " %")) +
+    scale_y_discrete(drop = FALSE) +
+    labs(title = "Gravedad (MAIS) por mecanismo y región anatómica",
+         subtitle = paste0("Cohorte 2020-2025. Porcentaje de pacientes lesionados en cada región, por grado MAIS (figura ",
+                           g, " de ", length(grupos_mec), ")"),
+         x = NULL, y = NULL) +
+    tema_mais +
+    theme(axis.text = element_text(size = 10),
+          strip.text = element_text(size = 11, face = "bold", colour = tinta, hjust = 0),
+          panel.spacing = unit(1.2, "lines"))
+  print(p)
+}
+```
+
 ### Mapa de calor: lesión grave (MAIS ≥ 3)
 
 Resumen en una sola figura. El color es el porcentaje de **todos** los pacientes del mecanismo con MAIS ≥ 3 en esa región; el texto indica el porcentaje y, entre paréntesis, el número de pacientes.

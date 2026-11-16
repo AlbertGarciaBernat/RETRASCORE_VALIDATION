@@ -404,15 +404,23 @@ injury_type <- factor(
   )
 )
 
+# High-risk mechanism depends only on the mechanism of injury. Self-injury is
+# no longer part of its definition (previously, precipitation counted as high
+# risk only when it was a self-injury); it is now an independent variable.
 high_risk_mechanism <- case_when(
   clean_mechanism %in% c(
     "arma de fuego", "atropello", "caida accidental", "otros/desconocido"
   ) ~ 1L,
-  clean_mechanism == "precipitacion" &
-    clean_intent == "intencionado : autolisis" ~ 1L,
-  !is.na(clean_mechanism) & clean_mechanism != "precipitacion" ~ 0L,
-  clean_mechanism == "precipitacion" &
-    !is.na(clean_intent) ~ 0L,
+  !is.na(clean_mechanism) ~ 0L,
+  TRUE ~ NA_integer_
+)
+
+# Self-injury as an independent binary variable (1 = self-injury, 0 = any other
+# recorded intentionality, including unknown intentionality, which is not
+# documented as self-injury). Empty intentionality remains missing.
+self_injury <- case_when(
+  clean_intent == "intencionado : autolisis" ~ 1L,
+  !is.na(clean_intent) ~ 0L,
   TRUE ~ NA_integer_
 )
 
@@ -604,6 +612,7 @@ retrascore_cohort <- data.frame(
   injury_type = injury_type,
   grouped_mechanism = clean_mechanism,
   high_risk_mechanism = high_risk_mechanism,
+  self_injury = self_injury,
   pupils = pupil_category,
   gcs_total = gcs_total,
   gcs_le_8 = gcs_le_8,
@@ -1021,6 +1030,7 @@ candidate_predictors <- c(
   "preinjury_antithrombotic",
   "prehospital_intubation",
   "high_risk_mechanism",
+  "self_injury",
   "pupils",
   "gcs_le_8",
   "hemodynamic_failure",
@@ -1962,3 +1972,121 @@ new2<-glm(formula = mortality_30d ~ age_category + preinjury_antithrombotic + pr
 summary(new2)
 ```
 
+# Effect of adding self-injury to the model
+
+`self_injury` is now an independent binary variable (1 = self-injury) that is
+separate from `high_risk_mechanism`, and it is offered as a candidate predictor
+in the variable selection above. This section compares three versions of the
+final model: without `high_risk_mechanism`, with it, and with
+`high_risk_mechanism` plus `self_injury`. The models are fitted in the training
+sample (2020-2023) and the validation sample (2024-2025) is used only to
+evaluate them.
+
+```{r self-injury-models}
+new3 <- glm(
+  formula = mortality_30d ~ age_category + preinjury_antithrombotic +
+    prehospital_intubation + pupils + gcs_le_8 + hemodynamic_failure +
+    respiratory_failure + coagulopathy_24h + mechanical_ventilation +
+    massive_hemorrhage + head_mais_group + high_risk_mechanism +
+    self_injury + external_mais_group,
+  family = binomial(link = "logit"),
+  data = selection_training_data,
+  na.action = na.fail
+)
+summary(new3)
+
+# Likelihood-ratio test: does self_injury improve the model that already
+# includes high_risk_mechanism?
+anova(new, new3, test = "Chisq")
+```
+
+```{r self-injury-performance, echo=FALSE}
+self_injury_models <- list(
+  "Without high-risk mechanism and self-injury" = new2,
+  "With high-risk mechanism" = new,
+  "With high-risk mechanism and self-injury" = new3
+)
+
+self_injury_performance <- do.call(rbind, lapply(
+  names(self_injury_models),
+  function(model_name) {
+    model <- self_injury_models[[model_name]]
+    n_terms <- length(attr(terms(model), "term.labels"))
+    rbind(
+      evaluate_selection_predictions(
+        method = model_name,
+        sample_name = "Training (2020-2023)",
+        observed = selection_training_data$mortality_30d,
+        predicted_probability = predict(
+          model, newdata = selection_training_data, type = "response"
+        ),
+        number_of_selected_predictors = n_terms
+      ),
+      evaluate_selection_predictions(
+        method = model_name,
+        sample_name = "Validation (2024-2025)",
+        observed = selection_test_data$mortality_30d,
+        predicted_probability = predict(
+          model, newdata = selection_test_data, type = "response"
+        ),
+        number_of_selected_predictors = n_terms
+      )
+    )
+  }
+))
+
+performance_columns_si <- c("AUC", "AUC 95% CI lower", "AUC 95% CI upper",
+                            "Brier score")
+self_injury_performance[performance_columns_si] <- lapply(
+  self_injury_performance[performance_columns_si], round, digits = 3
+)
+
+knitr::kable(
+  self_injury_performance,
+  align = c("l", "l", rep("r", 7)),
+  caption = paste(
+    "Training and validation performance of the final model without",
+    "and with self-injury (DeLong 95% AUC confidence intervals)"
+  )
+)
+```
+
+Paired DeLong tests of the validation AUC of the model with `self_injury`
+against the other two versions:
+
+```{r self-injury-delong, echo=FALSE}
+validation_roc <- lapply(self_injury_models, function(model) {
+  pROC::roc(
+    response = selection_test_data$mortality_30d,
+    predictor = predict(model, newdata = selection_test_data, type = "response"),
+    levels = c(0, 1), direction = "<", quiet = TRUE
+  )
+})
+
+reference_roc <- validation_roc[["With high-risk mechanism and self-injury"]]
+comparison_names <- c("With high-risk mechanism",
+                      "Without high-risk mechanism and self-injury")
+
+delong_self_injury <- data.frame(
+  Comparison = paste("Model with self-injury vs. model:", comparison_names),
+  `AUC difference` = vapply(comparison_names, function(nm) {
+    as.numeric(pROC::auc(reference_roc) - pROC::auc(validation_roc[[nm]]))
+  }, numeric(1)),
+  `DeLong p` = vapply(comparison_names, function(nm) {
+    format.pval(
+      pROC::roc.test(reference_roc, validation_roc[[nm]],
+                     method = "delong")$p.value,
+      digits = 3, eps = 0.001
+    )
+  }, character(1)),
+  check.names = FALSE,
+  row.names = NULL
+)
+delong_self_injury$`AUC difference` <- round(delong_self_injury$`AUC difference`, 4)
+
+knitr::kable(
+  delong_self_injury,
+  align = c("l", "r", "r"),
+  caption = "Paired DeLong test of the validation AUC: model with self-injury versus the other versions"
+)
+```

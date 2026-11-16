@@ -1,0 +1,385 @@
+---
+title: "Asociación entre regiones lesionadas (test de χ²)"
+subtitle: "Cohorte RETRASCORE"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    number_sections: true
+---
+
+```{r configuracion, include=FALSE}
+knitr::opts_chunk$set(
+  echo = TRUE,
+  message = FALSE,
+  warning = TRUE,
+  fig.align = "center"
+)
+options(scipen = 999)
+library(ggplot2)
+```
+
+# Objetivo y método
+
+Se estudia si las regiones anatómicas se lesionan juntas más (o menos) de lo esperado por azar. Con las 6 regiones (`mais1` = cabeza, `mais2` = extremidad superior, `mais3` = tórax, `mais4` = abdomen, `mais5` = extremidad inferior, `mais6` = externa/térmica) se define cada una como lesionada o no, y para cada par de regiones (15 pares) se construye una tabla 2×2 y se aplica un test de χ² de independencia.
+
+Detalles del análisis:
+
+- Se hacen dos versiones: **cualquier lesión** (MAIS ≥ 1) y **lesión grave** (MAIS ≥ 3). Un MAIS vacío se interpreta como ausencia de lesión.
+- Los p-valores se corrigen por comparaciones múltiples con el método de Holm (15 pares).
+- Como medida de tamaño del efecto se da el coeficiente phi (equivalente a la V de Cramér en tablas 2×2, con signo: positivo = se lesionan juntas más de lo esperado) y el odds ratio.
+- Si alguna frecuencia esperada es menor de 5, se usa el test exacto de Fisher en lugar de χ².
+- Con muestras grandes casi cualquier asociación sale significativa, por lo que hay que mirar el tamaño del efecto y no solo el p.
+
+# Lectura y selección de pacientes
+
+Misma selección que en `tablas_mecanismo.Rmd`: ingreso en UCI entre 2020 y 2025, mayores de 17 años, y pacientes con `evolucion_uci` y `mecanismo` informados (los mismos de la tabla de mortalidad por mecanismo).
+
+```{r lectura}
+ruta_csv <- file.path("..", "retrauci_abril_2026.csv")
+df <- read.csv2(ruta_csv, stringsAsFactors = TRUE)
+
+limpiar_texto <- function(x) trimws(tolower(as.character(x)))
+
+df$fecha_ingreso_uci <- as.Date(df$fecha_ingreso_uci, format = "%d/%m/%Y")
+df$anyo_ingreso_uci  <- as.integer(format(df$fecha_ingreso_uci, "%Y"))
+df <- df[!is.na(df$anyo_ingreso_uci) &
+           df$anyo_ingreso_uci >= 2020 &
+           df$anyo_ingreso_uci <= 2025, ]
+
+edad_num <- suppressWarnings(as.numeric(as.character(df$edad)))
+df <- df[is.na(edad_num) | edad_num >= 18, ]
+
+evol <- limpiar_texto(df$evolucion_uci)
+df$muerte <- ifelse(evol %in% c("exitus", "exitus y donacion"), 1L,
+                    ifelse(evol == "alta", 0L, NA_integer_))
+df$mecanismo_limpio <- limpiar_texto(df$mecanismo)
+df$mecanismo_limpio[df$mecanismo_limpio == ""] <- NA
+
+datos <- df[!is.na(df$muerte) & !is.na(df$mecanismo_limpio), ]
+cat("Pacientes incluidos en el análisis:", nrow(datos), "\n")
+```
+
+```{r matriz-mais}
+regiones_mais <- c(
+  "Cabeza"          = "mais1",
+  "Ext. superior"   = "mais2",
+  "Tórax"           = "mais3",
+  "Abdomen"         = "mais4",
+  "Ext. inferior"   = "mais5",
+  "Externa/térmica" = "mais6"
+)
+
+# Matriz pacientes x regiones con el MAIS numérico (vacío = 0 = sin lesión)
+mais_mat <- sapply(regiones_mais, function(v) {
+  m <- suppressWarnings(as.numeric(as.character(datos[[v]])))
+  m[is.na(m)] <- 0
+  m
+})
+
+# Número de pacientes con lesión por región (MAIS >= 1) y con lesión grave (MAIS >= 3)
+knitr::kable(
+  data.frame(
+    Region = names(regiones_mais),
+    Con_lesion = colSums(mais_mat >= 1),
+    Lesion_grave = colSums(mais_mat >= 3),
+    row.names = NULL
+  ),
+  col.names = c("Región", "Con lesión (MAIS ≥ 1)", "Lesión grave (MAIS ≥ 3)"),
+  align = c("l", "r", "r"),
+  caption = "Tabla 1. Pacientes con lesión y con lesión grave en cada región anatómica."
+)
+```
+
+# Función de análisis por pares
+
+Para cada par de regiones devuelve el número de pacientes con lesión en ambas, el χ² (o el test exacto de Fisher si alguna frecuencia esperada es menor de 5), el p-valor bruto y ajustado por Holm, el odds ratio (con corrección de 0,5 si hay alguna celda vacía) y el coeficiente phi.
+
+```{r funcion-pares}
+analizar_pares <- function(lesion) {
+  combos <- combn(colnames(lesion), 2, simplify = FALSE)
+
+  res <- do.call(rbind, lapply(combos, function(cc) {
+    x <- factor(lesion[, cc[1]], levels = c(FALSE, TRUE))
+    y <- factor(lesion[, cc[2]], levels = c(FALSE, TRUE))
+    tab <- table(x, y)
+
+    a <- tab[2, 2]; b <- tab[2, 1]; c_ <- tab[1, 2]; d <- tab[1, 1]
+    n <- sum(tab)
+    f <- rowSums(tab); k <- colSums(tab)
+    valido <- all(f > 0) && all(k > 0)
+
+    chi2 <- NA_real_; p <- NA_real_; test <- NA_character_; phi <- NA_real_
+    if (valido) {
+      esperado <- outer(f, k) / n
+      if (min(esperado) < 5) {
+        test <- "Fisher"
+        p <- fisher.test(tab)$p.value
+      } else {
+        test <- "Chi2"
+        ct <- chisq.test(tab, correct = FALSE)
+        chi2 <- unname(ct$statistic)
+        p <- ct$p.value
+      }
+      phi <- (a * d - b * c_) / sqrt(prod(f) * prod(k))
+    }
+
+    ajuste <- if (any(c(a, b, c_, d) == 0)) 0.5 else 0
+    or <- ((a + ajuste) * (d + ajuste)) / ((b + ajuste) * (c_ + ajuste))
+
+    data.frame(
+      Region_1 = cc[1], Region_2 = cc[2],
+      N_ambas = a,
+      Pct_ambas = round(100 * a / n, 1),
+      Test = test,
+      Chi2 = chi2,
+      p = p,
+      OR = or,
+      phi = phi,
+      stringsAsFactors = FALSE
+    )
+  }))
+
+  res$p_Holm <- p.adjust(res$p, method = "holm")
+  res$Significativo <- ifelse(is.na(res$p_Holm), NA, res$p_Holm < 0.05)
+  res
+}
+
+formatear_p <- function(p) ifelse(is.na(p), NA,
+                                  ifelse(p < 0.001, "<0,001", sprintf("%.3f", p)))
+
+tabla_pares <- function(res, caption) {
+  out <- res[order(-abs(res$phi)), ]
+  out$Chi2 <- round(out$Chi2, 1)
+  out$OR   <- round(out$OR, 2)
+  out$phi  <- round(out$phi, 3)
+  out$p      <- formatear_p(out$p)
+  out$p_Holm <- formatear_p(out$p_Holm)
+  out$Significativo <- ifelse(out$Significativo, "Sí", "No")
+  rownames(out) <- NULL
+  knitr::kable(
+    out,
+    col.names = c("Región 1", "Región 2", "Con ambas (n)", "Con ambas (%)", "Test",
+                  "χ²", "p", "OR", "phi", "p (Holm)", "Signif. (Holm < 0,05)"),
+    align = c("l", "l", "r", "r", "l", "r", "r", "r", "r", "r", "c"),
+    caption = caption
+  )
+}
+
+# Mapa de calor del coeficiente phi
+mapa_phi <- function(res, titulo, subtitulo) {
+  tinta   <- "#1a1a19"
+  tinta_2 <- "#5f5e5a"
+  fondo   <- "#fcfcfb"
+
+  sim <- rbind(
+    data.frame(R1 = res$Region_1, R2 = res$Region_2, phi = res$phi, sig = res$Significativo),
+    data.frame(R1 = res$Region_2, R2 = res$Region_1, phi = res$phi, sig = res$Significativo)
+  )
+  sim$R1 <- factor(sim$R1, levels = names(regiones_mais))
+  sim$R2 <- factor(sim$R2, levels = rev(names(regiones_mais)))
+  sim$etiqueta <- ifelse(is.na(sim$phi), "",
+                         paste0(sprintf("%.2f", sim$phi), ifelse(sim$sig %in% TRUE, "*", "")))
+  lim <- max(abs(sim$phi), 0.05, na.rm = TRUE)
+  sim$texto_col <- ifelse(!is.na(sim$phi) & abs(sim$phi) > 0.6 * lim, "#ffffff", tinta)
+
+  ggplot(sim, aes(x = R1, y = R2, fill = phi)) +
+    geom_tile(colour = fondo, linewidth = 1) +
+    geom_text(aes(label = etiqueta, colour = texto_col), size = 3.6) +
+    scale_colour_identity() +
+    scale_fill_gradient2(low = "#c8553d", mid = "#f4f3ef", high = "#1c5cab",
+                         midpoint = 0, limits = c(-lim, lim),
+                         na.value = "#e6e5e1", name = "phi") +
+    scale_x_discrete(position = "top") +
+    labs(title = titulo, subtitle = subtitulo, x = NULL, y = NULL) +
+    theme_minimal(base_size = 11) +
+    theme(
+      plot.background  = element_rect(fill = fondo, colour = NA),
+      panel.background = element_rect(fill = fondo, colour = NA),
+      panel.grid = element_blank(),
+      axis.text  = element_text(colour = tinta_2),
+      plot.title = element_text(colour = tinta, face = "bold"),
+      plot.subtitle = element_text(colour = tinta_2)
+    )
+}
+```
+
+# Asociación entre regiones con cualquier lesión (MAIS ≥ 1)
+
+```{r pares-mais1}
+res_mais1 <- analizar_pares(mais_mat >= 1)
+tabla_pares(res_mais1, "Tabla 2. Asociación entre pares de regiones con cualquier lesión (MAIS ≥ 1): χ² (o Fisher), odds ratio y coeficiente phi, ordenados por |phi|.")
+```
+
+El mapa muestra el coeficiente phi de cada par: azul = las regiones se lesionan juntas más de lo esperado, rojo = menos de lo esperado. El asterisco marca los pares significativos tras la corrección de Holm.
+
+```{r mapa-mais1, fig.width=7.5, fig.height=5.5}
+mapa_phi(res_mais1,
+         "Asociación entre regiones lesionadas (MAIS ≥ 1)",
+         "Coeficiente phi; * = p ajustado (Holm) < 0,05")
+```
+
+# Asociación entre regiones con lesión grave (MAIS ≥ 3)
+
+```{r pares-mais3}
+res_mais3 <- analizar_pares(mais_mat >= 3)
+tabla_pares(res_mais3, "Tabla 3. Asociación entre pares de regiones con lesión grave (MAIS ≥ 3): χ² (o Fisher), odds ratio y coeficiente phi, ordenados por |phi|.")
+```
+
+```{r mapa-mais3, fig.width=7.5, fig.height=5.5}
+mapa_phi(res_mais3,
+         "Asociación entre regiones con lesión grave (MAIS ≥ 3)",
+         "Coeficiente phi; * = p ajustado (Holm) < 0,05")
+```
+
+# Interpretación y limitaciones
+
+- **Qué mide el χ².** Solo indica asociación, no su causa. La dirección y la magnitud se leen con el odds ratio y con el signo de phi.
+- **n grande.** Con miles de pacientes casi cualquier asociación sale significativa aunque sea mínima, por eso se ordenan las tablas por |phi| y se interpreta el tamaño del efecto.
+- **Frecuencias bajas.** En lesión grave, algunas regiones (por ejemplo externa/térmica) tienen pocos casos y el test pasa a ser Fisher, con OR poco estables.
+- **Gravedad global.** Parte de la asociación entre regiones puede deberse a que los politraumatizados graves tienen más regiones lesionadas (el MAIS y el ISS comparten información). Para aislar esa parte se puede repetir el análisis estratificando por ISS, o usar una regresión logística de una región sobre las demás.
+- **MAIS vacío.** Se interpreta como ausencia de lesión; si en realidad hay datos perdidos, las asociaciones pueden estar deformadas.
+- **Población.** Con todos los mecanismos juntos dominan los más frecuentes (tráfico y caídas). Repetir el análisis por mecanismo da patrones más específicos, pero con n pequeños en algunos.
+
+# Mortalidad según mecanismo y autólisis (análisis de la devianza)
+
+Complemento al análisis anterior. Se ajusta un modelo de regresión logística con la mortalidad en UCI como resultado (`muerte`: 1 = exitus, 0 = alta) y como variables explicativas el **mecanismo** de trauma y la **autólisis** (sí/no). La función `anova()` aplicada a un modelo logístico no compara medias: hace un análisis de la devianza, con un contraste χ² de razón de verosimilitud para cada variable.
+
+Decisiones del análisis:
+
+- **Autólisis:** `intencionalidad` = `intencionado : autolisis` frente al resto de pacientes con intencionalidad conocida (no intencionado o agresión). Los pacientes con intencionalidad desconocida o vacía se excluyen.
+- **Mecanismos poco frecuentes:** los mecanismos con menos de 20 pacientes se agrupan en "otros (agrupados)" para evitar categorías con muy pocos casos, que dan estimaciones inestables.
+- **Categoría de referencia:** el mecanismo más frecuente.
+
+```{r preparacion-modelo}
+int_txt <- limpiar_texto(datos$intencionalidad)
+datos$autolisis <- NA_character_
+datos$autolisis[grepl("^no intencional", int_txt) |
+                  int_txt == "intencionado : agresion"] <- "No"
+datos$autolisis[int_txt == "intencionado : autolisis"]  <- "Sí"
+datos$autolisis <- factor(datos$autolisis, levels = c("No", "Sí"))
+
+datos$edad_num <- suppressWarnings(as.numeric(as.character(datos$edad)))
+datos$iss_num  <- suppressWarnings(as.numeric(as.character(datos$iss)))
+
+mod_dat <- datos[!is.na(datos$autolisis), ]
+
+frec_mec <- table(mod_dat$mecanismo_limpio)
+mec_raros <- names(frec_mec)[frec_mec < 20]
+mec <- mod_dat$mecanismo_limpio
+mec[mec %in% mec_raros] <- "otros (agrupados)"
+ref_mec <- names(sort(frec_mec, decreasing = TRUE))[1]
+mod_dat$mecanismo_mod <- relevel(factor(mec), ref = ref_mec)
+
+cat("Pacientes en el modelo:", nrow(mod_dat),
+    "\nExcluidos por intencionalidad desconocida/vacía:", nrow(datos) - nrow(mod_dat),
+    "\nMecanismos agrupados en 'otros':", length(mec_raros),
+    "\nMecanismo de referencia:", ref_mec, "\n")
+knitr::kable(
+  data.frame(table(mod_dat$autolisis)),
+  col.names = c("Autólisis", "Pacientes (n)"),
+  align = c("l", "r"),
+  caption = "Tabla 4. Pacientes incluidos en el modelo según autólisis."
+)
+```
+
+## Modelo y tabla de devianza (mortalidad ~ mecanismo + autólisis)
+
+```{r modelo-base}
+m1 <- glm(muerte ~ mecanismo_mod + autolisis, data = mod_dat, family = binomial)
+
+tabla_devianza <- function(modelo) {
+  a <- as.data.frame(anova(modelo, test = "Chisq"))
+  a <- a[rownames(a) != "NULL", ]
+  data.frame(
+    Variable = rownames(a),
+    gl = a$Df,
+    Devianza = round(a$Deviance, 1),
+    p = formatear_p(a[["Pr(>Chi)"]])
+  )
+}
+
+knitr::kable(tabla_devianza(m1), align = c("l", "r", "r", "r"),
+             col.names = c("Variable", "gl", "Devianza", "p (χ²)"),
+             caption = "Tabla 5. Análisis de la devianza secuencial de la mortalidad: mecanismo y después autólisis.")
+```
+
+Esta tabla es **secuencial**: cada variable se evalúa después de las anteriores. Para comprobar que el resultado no depende del orden se repite con las variables invertidas.
+
+```{r modelo-orden-invertido}
+m1_inv <- glm(muerte ~ autolisis + mecanismo_mod, data = mod_dat, family = binomial)
+knitr::kable(tabla_devianza(m1_inv), align = c("l", "r", "r", "r"),
+             col.names = c("Variable", "gl", "Devianza", "p (χ²)"),
+             caption = "Tabla 6. Análisis de la devianza secuencial con el orden invertido: autólisis y después mecanismo.")
+```
+
+Para obtener un contraste que no dependa del orden, se evalúa cada variable frente al modelo sin ella, con todo lo demás ya incluido (razón de verosimilitud):
+
+```{r modelo-drop1}
+d1 <- as.data.frame(drop1(m1, test = "Chisq"))
+d1 <- d1[rownames(d1) != "<none>", ]
+knitr::kable(
+  data.frame(Variable = rownames(d1), gl = d1$Df,
+             LRT = round(d1$LRT, 1), p = formatear_p(d1[["Pr(>Chi)"]])),
+  align = c("l", "r", "r", "r"),
+  col.names = c("Variable (eliminada del modelo)", "gl", "χ² (LRT)", "p"),
+  caption = "Tabla 7. Contraste de razón de verosimilitud de cada variable frente al modelo sin ella (no depende del orden)."
+)
+```
+
+## Odds ratios del modelo
+
+Odds ratio de mortalidad de cada mecanismo frente al de referencia y de la autólisis frente a no autólisis, con IC 95 % de Wald. Un OR > 1 indica mayor mortalidad.
+
+```{r modelo-or}
+tabla_or <- function(modelo) {
+  est <- cbind(OR = coef(modelo), confint.default(modelo))
+  est <- exp(est)[rownames(est) != "(Intercept)", , drop = FALSE]
+  data.frame(
+    Termino = sub("^mecanismo_mod", "Mecanismo: ", sub("^autolisis", "Autólisis: ", rownames(est))),
+    OR = round(est[, "OR"], 2),
+    IC95 = paste0(round(est[, "2.5 %"], 2), " – ", round(est[, "97.5 %"], 2)),
+    p = formatear_p(summary(modelo)$coefficients[rownames(est), "Pr(>|z|)"])
+  )
+}
+
+knitr::kable(tabla_or(m1), align = c("l", "r", "r", "r"),
+             col.names = c("Término", "OR", "IC 95 %", "p"),
+             caption = "Tabla 8. Odds ratios de mortalidad (modelo sin ajustar). Referencia: mecanismo más frecuente y no autólisis.")
+```
+
+## Modelo ajustado por edad e ISS
+
+La mortalidad depende mucho de la edad y de la gravedad global, y esas variables pueden estar distribuidas de forma distinta entre mecanismos. Se repite el modelo añadiendo edad e ISS para ver si el efecto del mecanismo y de la autólisis se mantiene. Se usan solo los pacientes con edad e ISS conocidos.
+
+```{r modelo-ajustado}
+dat_aj <- mod_dat[!is.na(mod_dat$edad_num) & !is.na(mod_dat$iss_num), ]
+cat("Pacientes en el modelo ajustado:", nrow(dat_aj), "\n")
+
+m2 <- glm(muerte ~ edad_num + iss_num + mecanismo_mod + autolisis,
+          data = dat_aj, family = binomial)
+
+d2 <- as.data.frame(drop1(m2, test = "Chisq"))
+d2 <- d2[rownames(d2) != "<none>", ]
+knitr::kable(
+  data.frame(Variable = rownames(d2), gl = d2$Df,
+             LRT = round(d2$LRT, 1), p = formatear_p(d2[["Pr(>Chi)"]])),
+  align = c("l", "r", "r", "r"),
+  col.names = c("Variable (eliminada del modelo)", "gl", "χ² (LRT)", "p"),
+  caption = "Tabla 9. Contraste de razón de verosimilitud de cada variable en el modelo ajustado por edad e ISS."
+)
+```
+
+```{r modelo-ajustado-or}
+knitr::kable(tabla_or(m2), align = c("l", "r", "r", "r"),
+             col.names = c("Término", "OR ajustado", "IC 95 %", "p"),
+             caption = "Tabla 10. Odds ratios de mortalidad ajustados por edad e ISS (edad e ISS por unidad). Referencia: mecanismo más frecuente y no autólisis.")
+```
+
+## Interpretación y limitaciones
+
+- **Qué responde.** El contraste del mecanismo indica si, en conjunto, el mecanismo se asocia con la mortalidad; el de autólisis indica si añade información una vez conocido el mecanismo. No dice cuáles mecanismos concretos difieren: eso se lee en los odds ratios, que no están corregidos por comparaciones múltiples.
+- **Solapamiento.** Autólisis y mecanismo están muy entrelazados (ciertos mecanismos son casi exclusivos de autólisis). Eso deja poca información propia a la autólisis y hace los OR inestables; hay que mirar los IC antes que los p.
+- **Orden.** La tabla secuencial depende del orden de las variables; el contraste con `drop1` no.
+- **Datos perdidos.** El modelo ajustado excluye pacientes sin edad o ISS, lo que puede cambiar la población respecto al modelo base.
