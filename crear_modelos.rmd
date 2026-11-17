@@ -46,7 +46,7 @@ variable_año <- "a\u00f1o_trauma"
 # Años que se analizaran. Ejemplos:
 # años_estudio <- 2015:2019
 # años_estudio <- c(2015, 2017, 2020)
-años_estudio <- 2020:2025
+años_estudio <- 2020:2023
 
 # Predictores del modelo.
 # Estan incluidas las 40 variables de cohorte_retrascore.rds.
@@ -101,7 +101,7 @@ predictores <- c(
 # Para desactivar una interaccion, comente su linea con #.
 interacciones <- c(
   #"mais_torax:fallo_hemodinamico"
-  "mais_abdomen:mais_cabeza"
+  #"mais_abdomen:mais_cabeza"
 )
 ```
 

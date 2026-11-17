@@ -404,14 +404,15 @@ injury_type <- factor(
   )
 )
 
-# High-risk mechanism depends only on the mechanism of injury. Self-injury is
-# no longer part of its definition (previously, precipitation counted as high
-# risk only when it was a self-injury); it is now an independent variable.
 high_risk_mechanism <- case_when(
   clean_mechanism %in% c(
     "arma de fuego", "atropello", "caida accidental", "otros/desconocido"
   ) ~ 1L,
-  !is.na(clean_mechanism) ~ 0L,
+  clean_mechanism == "precipitacion" &
+    clean_intent == "intencionado : autolisis" ~ 1L,
+  !is.na(clean_mechanism) & clean_mechanism != "precipitacion" ~ 0L,
+  clean_mechanism == "precipitacion" &
+    !is.na(clean_intent) ~ 0L,
   TRUE ~ NA_integer_
 )
 

@@ -37,8 +37,8 @@ pacientes que tienen una **lesión grave (AIS máximo >= 3) en ambas regiones** 
 la **mortalidad a 30 días** de esos pacientes. El **color** del heatmap depende
 de la n (no de la mortalidad). La diagonal contiene todos los
 pacientes con lesión grave en esa región. A la derecha se añade la columna
-**"Solo esta lesión"**: pacientes con lesión grave en esa región y en ninguna
-otra.
+**"Solo esta lesión"**: pacientes con lesión grave en esa región y sin ninguna
+lesión (AIS 0, ni siquiera leve) en las otras 8 regiones.
 
 Las regiones AIS proceden de `lesion_X_region_ais` y la gravedad de
 `lesion_X_gravedad` (32 lesiones por paciente). Se utiliza
@@ -251,7 +251,11 @@ n_matrix <- crossprod(severe_matrix)
 death_matrix <- crossprod(severe_matrix, severe_matrix * died)
 
 # Pacientes con lesión grave únicamente en una región.
-only_matrix <- severe_matrix * (rowSums(severe_matrix) == 1L)
+# "Solo" = lesión grave en la región y AIS 0 (ninguna lesión, ni leve) en las
+# otras 8 regiones. Es la misma definición de "Only this region" de
+# cutoff/cutoff_justification.Rmd.
+any_injury_matrix <- max_ais_by_region > 0
+only_matrix <- severe_matrix * (rowSums(any_injury_matrix) == 1L)
 n_only <- colSums(only_matrix)
 death_only <- colSums(only_matrix * died)
 
