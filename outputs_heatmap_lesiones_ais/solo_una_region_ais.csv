@@ -1,10 +1,10 @@
 "Region","n total region","n solo esta lesion","% sobre el total de la region","Fallecidos (30 d)","Mortalidad (%)"
-"Craneo",9341,3093,33.1,737,23.8
-"Cara",3756,113,3,8,7.1
-"Cuello",350,72,20.6,7,9.7
-"Torax",8829,815,9.2,45,5.5
-"Abdomen",3738,447,12,13,2.9
-"Columna vertebral",4880,335,6.9,44,13.1
-"Extremidades superiores",4674,94,2,3,3.2
-"Extremidades inferiores",5281,438,8.3,19,4.3
-"Piel y partes blandas",771,126,16.3,20,15.9
+"Craneo",4359,2016,46.2,673,33.4
+"Cara",55,4,7.3,1,25
+"Cuello",38,13,34.2,5,38.5
+"Torax",2440,300,12.3,33,11
+"Abdomen",976,158,16.2,11,7
+"Columna vertebral",653,208,31.9,42,20.2
+"Extremidades superiores",37,13,35.1,0,0
+"Extremidades inferiores",1216,133,10.9,10,7.5
+"Piel y partes blandas",66,42,63.6,19,45.2

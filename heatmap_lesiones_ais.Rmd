@@ -54,13 +54,19 @@ output_dir <- "outputs_heatmap_lesiones_ais"
 
 year_range <- c(2015L, 2025L)   # año del trauma
 minimum_age <- 18               # se eliminan los menores de 18 años
-severe_threshold <- 1           # lesión grave: AIS máximo de la región >= 3
+severe_threshold <- 4           # lesión grave: AIS máximo de la región >= 3
 number_of_lesions <- 32L
 
 region_names <- c(
   "Craneo", "Cara", "Cuello", "Torax", "Abdomen",
   "Columna vertebral", "Extremidades superiores",
   "Extremidades inferiores", "Piel y partes blandas"
+)
+
+# English labels used only inside the heatmap figure
+region_names_en <- c(
+  "Head", "Face", "Neck", "Thorax", "Abdomen",
+  "Spine", "Upper extremities", "Lower extremities", "Skin / soft tissue"
 )
 
 dir.create(output_dir, showWarnings = FALSE)
@@ -309,26 +315,26 @@ heatmap_plot <- ggplot(heat_data, aes(x = x, y = y)) +
   scale_fill_viridis_c(
     option = "magma", direction = -1, trans = "sqrt",
     breaks = c(10, 50, 200, 500, 1000, 2000, 4000, 7000),
-    name = "n pacientes\n(escala raíz\ncuadrada)"
+    name = "n patients\n(square-root\nscale)"
   ) +
   scale_x_continuous(
     breaks = c(1:9, 10.6),
-    labels = c(region_names, "Solo esta\nlesion"),
+    labels = c(region_names_en, "Only this\ninjury"),
     position = "top", expand = c(0.01, 0.01)
   ) +
   scale_y_continuous(
-    breaks = 9:1, labels = region_names, expand = c(0.01, 0.01)
+    breaks = 9:1, labels = region_names_en, expand = c(0.01, 0.01)
   ) +
   labs(
     title = paste0(
-      "Lesiones graves (AIS >= ", severe_threshold,
-      ") por región anatómica y mortalidad a 30 días"
+      "Severe injuries (AIS >= ", severe_threshold,
+      ") by anatomical region and 30-day mortality"
     ),
     subtitle = paste0(
-      "Color = n pacientes con lesión grave en ambas regiones. Cada recuadro ",
-      "indica n y % de mortalidad a 30 días. Diagonal = total de la región.\n",
-      "Pacientes ", year_range[1], "-", year_range[2],
-      ", edad >= ", minimum_age, " (N = ", nrow(cohort), ")."
+      "Colour = n patients with a severe injury in both regions. Each tile ",
+      "shows n and % 30-day mortality. Diagonal = region total.\n",
+      "Patients ", year_range[1], "-", year_range[2],
+      ", age >= ", minimum_age, " (N = ", nrow(cohort), ")."
     ),
     x = NULL, y = NULL
   ) +
@@ -341,9 +347,130 @@ heatmap_plot <- ggplot(heat_data, aes(x = x, y = y)) +
 
 ggsave(
   file.path(output_dir, "heatmap_lesiones_ais.png"),
-  heatmap_plot, width = 14, height = 9.5, dpi = 200
+  heatmap_plot, width = 14, height = 9.5, dpi = 300
 )
 heatmap_plot
+```
+
+# Heatmap con las 6 regiones agrupadas
+
+Mismo heatmap que el anterior, pero con las **6 regiones agrupadas** del
+registro (`mais1` = cabeza, `mais2` = extremidad superior, `mais3` = tórax,
+`mais4` = abdomen, `mais5` = extremidad inferior incluida la pelvis y `mais6` =
+externa/térmica). Se usa la misma cohorte y la misma definición de lesión grave
+(AIS máximo de la región >= `severe_threshold`). Una celda vacía, `NA` o `NAS`
+en `mais1`-`mais6` se interpreta como ausencia de lesión (AIS 0), igual que en
+`ultimate_validation_preprocessing.Rmd`. La columna **"Only this injury"**
+cuenta a los pacientes con lesión grave en esa región y AIS 0 en las otras 5.
+
+```{r heatmap-6-regions, fig.width=11, fig.height=7.5, dpi=130}
+region_names_6_en <- c(
+  "Head", "Upper extremity", "Thorax", "Abdomen",
+  "Lower extremity", "External"
+)
+n_groups <- length(region_names_6_en)
+
+mais_6 <- sapply(paste0("mais", 1:n_groups), function(variable) {
+  value <- clean_number(cohort[[variable]])
+  value[is.na(value)] <- 0          # empty / NA / NAS = no injury
+  value[!(value %in% 0:6)] <- NA_real_
+  value
+})
+colnames(mais_6) <- region_names_6_en
+
+severe_6 <- (mais_6 >= severe_threshold) * 1L
+severe_6[is.na(severe_6)] <- 0L
+
+n_matrix_6 <- crossprod(severe_6)
+death_matrix_6 <- crossprod(severe_6, severe_6 * died)
+
+any_injury_6 <- !is.na(mais_6) & mais_6 > 0
+only_matrix_6 <- severe_6 * (rowSums(any_injury_6) == 1L)
+n_only_6 <- colSums(only_matrix_6)
+death_only_6 <- colSums(only_matrix_6 * died)
+
+heat_data_6 <- expand.grid(row_idx = 1:n_groups, col_idx = 1:n_groups)
+heat_data_6$n <- n_matrix_6[cbind(heat_data_6$row_idx, heat_data_6$col_idx)]
+heat_data_6$deaths <- death_matrix_6[
+  cbind(heat_data_6$row_idx, heat_data_6$col_idx)
+]
+heat_data_6$x <- heat_data_6$col_idx
+
+only_x_6 <- n_groups + 1.6
+only_data_6 <- data.frame(
+  row_idx = 1:n_groups, col_idx = n_groups + 1L,
+  n = n_only_6, deaths = death_only_6, x = only_x_6
+)
+
+heat_data_6 <- rbind(heat_data_6, only_data_6)
+heat_data_6$mortality <- pct(heat_data_6$deaths, heat_data_6$n)
+heat_data_6$y <- (n_groups + 1) - heat_data_6$row_idx
+heat_data_6$label <- ifelse(
+  heat_data_6$n == 0,
+  "0",
+  sprintf("%d\n%.1f%%", heat_data_6$n, heat_data_6$mortality)
+)
+heat_data_6$text_colour <- ifelse(
+  sqrt(heat_data_6$n) > 0.55 * sqrt(max(heat_data_6$n)), "white", "black"
+)
+
+diagonal_data_6 <- heat_data_6[
+  heat_data_6$col_idx == heat_data_6$row_idx & heat_data_6$x <= n_groups,
+]
+
+heatmap_plot_6 <- ggplot(heat_data_6, aes(x = x, y = y)) +
+  geom_tile(
+    aes(fill = n),
+    colour = "white", linewidth = 0.8, width = 1, height = 1
+  ) +
+  geom_tile(
+    data = diagonal_data_6, fill = NA, colour = "black", linewidth = 1,
+    width = 1, height = 1
+  ) +
+  geom_text(
+    aes(label = label, colour = text_colour),
+    size = 4, lineheight = 0.9
+  ) +
+  scale_colour_identity() +
+  scale_fill_viridis_c(
+    option = "magma", direction = -1, trans = "sqrt",
+    breaks = c(10, 50, 200, 500, 1000, 2000, 4000, 7000),
+    name = "n patients\n(square-root\nscale)"
+  ) +
+  scale_x_continuous(
+    breaks = c(1:n_groups, only_x_6),
+    labels = c(region_names_6_en, "Only this\ninjury"),
+    position = "top", expand = c(0.01, 0.01)
+  ) +
+  scale_y_continuous(
+    breaks = n_groups:1, labels = region_names_6_en,
+    expand = c(0.01, 0.01)
+  ) +
+  labs(
+    title = paste0(
+      "Severe injuries (AIS >= ", severe_threshold,
+      ") by the six grouped anatomical regions and 30-day mortality"
+    ),
+    subtitle = paste0(
+      "Colour = n patients with a severe injury in both regions. Each tile ",
+      "shows n and % 30-day mortality. Diagonal = region total.\n",
+      "Patients ", year_range[1], "-", year_range[2],
+      ", age >= ", minimum_age, " (N = ", nrow(cohort), ")."
+    ),
+    x = NULL, y = NULL
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(
+    panel.grid = element_blank(),
+    axis.text.x.top = element_text(angle = 35, hjust = 0, vjust = 0),
+    plot.subtitle = element_text(size = 10)
+  )
+
+ggsave(
+  file.path(output_dir, "heatmap_lesiones_6_regiones.png"),
+  heatmap_plot_6, width = 11, height = 7.5, dpi = 300
+)
+heatmap_plot_6
 ```
 
 # Tablas

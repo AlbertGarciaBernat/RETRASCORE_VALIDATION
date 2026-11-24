@@ -14,7 +14,14 @@ knitr::opts_chunk$set(
   echo = TRUE,
   message = FALSE,
   warning = TRUE,
-  fig.align = "center"
+  fig.align = "center",
+  # High-quality figures: 300 dpi (96 dpi x 3.125 retina factor). The size shown
+  # in the HTML is unchanged. ragg gives smoother text and edges when installed.
+  dpi = 96,
+  fig.retina = 3.125,
+  dev = if (requireNamespace("ragg", quietly = TRUE)) "ragg_png" else "png",
+  # Each figure is also kept as a PNG file in this folder after knitting
+  fig.path = "figuras_300dpi/"
 )
 options(scipen = 999)
 ```
@@ -295,8 +302,41 @@ tema_mais <- theme_minimal(base_size = 11) +
     legend.text  = element_text(colour = tinta_2)
   )
 
+# English labels, used only inside the figures (tables keep the Spanish names)
+region_en <- c(
+  "Cabeza"          = "Head",
+  "Ext. superior"   = "Upper extremity",
+  "Tórax"           = "Thorax",
+  "Abdomen"         = "Abdomen",
+  "Ext. inferior"   = "Lower extremity",
+  "Externa/térmica" = "External / thermal"
+)
+mecanismo_en <- c(
+  "caida accidental"               = "Accidental fall",
+  "moto"                           = "Motorcycle",
+  "coche"                          = "Car",
+  "precipitacion"                  = "Fall from height",
+  "atropello"                      = "Pedestrian hit",
+  "bici"                           = "Bicycle",
+  "arma blanca"                    = "Stabbing (bladed weapon)",
+  "golpeo con objeto"              = "Blow with an object",
+  "otros"                          = "Other",
+  "otros vehiculos"                = "Other vehicles",
+  "aplastamiento"                  = "Crush",
+  "desconocido"                    = "Unknown",
+  "arma de fuego"                  = "Firearm",
+  "accidente por zambullida"       = "Diving accident",
+  "asta de toro"                   = "Bull goring",
+  "explosion"                      = "Explosion",
+  "vehiculo movilidad unipersonal" = "Personal mobility vehicle"
+)
+traducir_mec <- function(x) {
+  en <- unname(mecanismo_en[as.character(x)])
+  ifelse(is.na(en), as.character(x), en)
+}
+
 n_mec_top5 <- setNames(tabla_auto$N[match(top5, tabla_auto$Mecanismo)], top5)
-etiqueta_mec <- paste0(top5, " (n=", n_mec_top5, ")")
+etiqueta_mec <- paste0(traducir_mec(top5), " (n=", n_mec_top5, ")")
 names(etiqueta_mec) <- top5
 orden_regiones <- names(regiones_mais)
 ```
@@ -327,13 +367,13 @@ ggplot(long_mais, aes(x = pct, y = Mecanismo, fill = MAIS)) +
   geom_col(width = 0.65, colour = fondo, linewidth = 0.6) +
   geom_text(data = totales, aes(x = 101, y = Mecanismo, label = paste0("n=", tot)),
             inherit.aes = FALSE, hjust = 0, size = 3, colour = tinta_2) +
-  facet_wrap(~ Region, ncol = 2) +
+  facet_wrap(~ Region, ncol = 2, labeller = labeller(Region = region_en)) +
   scale_fill_manual(values = cols_mais, breaks = paste0("MAIS ", 1:6)) +
   scale_x_continuous(limits = c(0, 118), breaks = seq(0, 100, 25),
                      labels = function(x) paste0(x, " %")) +
   scale_y_discrete(labels = etiqueta_mec) +
-  labs(title = "Gravedad (MAIS) por región en el top 5 de mecanismos de autólisis",
-       subtitle = "Porcentaje de pacientes lesionados en cada región, por grado MAIS",
+  labs(title = "MAIS severity by region in the top 5 self-harm mechanisms",
+       subtitle = "Percentage of injured patients in each region, by MAIS grade",
        x = NULL, y = NULL) +
   tema_mais
 ```
@@ -347,7 +387,7 @@ tabla_mec_orden <- tabla_mecanismo[tabla_mecanismo$Mecanismo != "TOTAL", ]
 mecanismos_todos <- tabla_mec_orden$Mecanismo[order(-tabla_mec_orden$N)]
 n_mec_todos <- setNames(tabla_mec_orden$N[match(mecanismos_todos, tabla_mec_orden$Mecanismo)],
                         mecanismos_todos)
-etiqueta_mec_todos <- paste0(mecanismos_todos, " (n=", n_mec_todos, ")")
+etiqueta_mec_todos <- paste0(traducir_mec(mecanismos_todos), " (n=", n_mec_todos, ")")
 
 dist_mais_todos <- do.call(rbind, lapply(mecanismos_todos, function(m) {
   pac <- datos_tabla[datos_tabla$mecanismo_limpio == m, ]
@@ -389,10 +429,10 @@ for (g in seq_along(grupos_mec)) {
     scale_fill_manual(values = cols_mais, breaks = paste0("MAIS ", 1:6)) +
     scale_x_continuous(limits = c(0, 118), breaks = seq(0, 100, 25),
                        labels = function(x) paste0(x, " %")) +
-    scale_y_discrete(drop = FALSE) +
-    labs(title = "Gravedad (MAIS) por mecanismo y región anatómica",
-         subtitle = paste0("Cohorte 2020-2025. Porcentaje de pacientes lesionados en cada región, por grado MAIS (figura ",
-                           g, " de ", length(grupos_mec), ")"),
+    scale_y_discrete(drop = FALSE, labels = region_en) +
+    labs(title = "MAIS severity by mechanism and anatomical region",
+         subtitle = paste0("2020-2025 cohort. Percentage of injured patients in each region, by MAIS grade (figure ",
+                           g, " of ", length(grupos_mec), ")"),
          x = NULL, y = NULL) +
     tema_mais +
     theme(axis.text = element_text(size = 10),
@@ -419,11 +459,12 @@ ggplot(mc, aes(x = Mecanismo, y = Region, fill = MAIS_ge3_pct)) +
   scale_colour_identity() +
   scale_fill_gradientn(
     colours = c("#cde2fb", "#9ec5f4", "#5598e7", "#2a78d6", "#1c5cab", "#0d366b"),
-    limits = c(0, 100), name = "% con MAIS ≥ 3"
+    limits = c(0, 100), name = "% with MAIS ≥ 3"
   ) +
   scale_x_discrete(position = "top", labels = function(x) etiqueta_mec[x]) +
-  labs(title = "Lesión grave (MAIS ≥ 3) por región y mecanismo",
-       subtitle = "Autólisis, top 5 de mecanismos", x = NULL, y = NULL) +
+  scale_y_discrete(labels = region_en) +
+  labs(title = "Severe injury (MAIS ≥ 3) by region and mechanism",
+       subtitle = "Self-harm, top 5 mechanisms", x = NULL, y = NULL) +
   tema_mais +
   theme(panel.grid = element_blank(), legend.position = "right")
 ```

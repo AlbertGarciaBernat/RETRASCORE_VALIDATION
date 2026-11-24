@@ -8,7 +8,14 @@ date: "2026-11-09"
 ---
 
 ```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE)
+knitr::opts_chunk$set(
+  echo = FALSE, warning = FALSE, message = FALSE,
+  # Figures saved at 300 dpi (96 dpi x 3.125 retina factor); the size shown
+  # in the HTML stays the same as before (fig.width x 96 px).
+  dpi = 96, fig.retina = 3.125,
+  # Every figure is also kept as a PNG file in this folder after knitting
+  fig.path = "figuras_300dpi/"
+)
 options(width = 120)
 ```
 
@@ -472,7 +479,7 @@ that they can be compared directly. Patients with unknown age are left out.
 ```{r age-functions}
 patient_age <- retrascore_cohort$age[match(analysis_data$row_id, retrascore_cohort$row_id)]
 age_groups <- list(
-  `Younger than 65 years` = !is.na(patient_age) & patient_age < 65,
+  `Younger than 65 years` = !is.na(patient_age) & patient_age < 60,
   `Aged 65 years or more` = !is.na(patient_age) & patient_age >= 65
 )
 
