@@ -1956,143 +1956,6 @@ knitr::kable(
   )
 )
 ```
-```{r}
-new<-glm(formula = mortality_30d ~ age_category + preinjury_antithrombotic + prehospital_intubation + 
-     pupils + gcs_le_8 + hemodynamic_failure + 
-    respiratory_failure + coagulopathy_24h + mechanical_ventilation + 
-    massive_hemorrhage + head_mais_group  + high_risk_mechanism +
-    external_mais_group, family = binomial(link = "logit"), 
-    data = selection_training_data, na.action = na.fail)
-summary(new)
-
-new2<-glm(formula = mortality_30d ~ age_category + preinjury_antithrombotic + prehospital_intubation + 
-     pupils + gcs_le_8 + hemodynamic_failure + 
-    respiratory_failure + coagulopathy_24h + mechanical_ventilation + 
-    massive_hemorrhage + head_mais_group   +
-    external_mais_group, family = binomial(link = "logit"), 
-    data = selection_training_data, na.action = na.fail)
-summary(new2)
-```
-
-# Effect of adding self-injury to the model
-
-`self_injury` is an independent binary variable (1 = self-injury intent). Every
-patient with self-injury intent is also coded as `high_risk_mechanism` = 1,
-whatever the mechanism, so `self_injury` is a subset of `high_risk_mechanism`.
-It is offered as a candidate predictor in the variable selection above. This section compares three versions of the
-final model: without `high_risk_mechanism`, with it, and with
-`high_risk_mechanism` plus `self_injury`. The models are fitted in the training
-sample (2020-2023) and the validation sample (2024-2025) is used only to
-evaluate them.
-
-```{r self-injury-models}
-new3 <- glm(
-  formula = mortality_30d ~ age_category + preinjury_antithrombotic +
-    prehospital_intubation + pupils + gcs_le_8 + hemodynamic_failure +
-    respiratory_failure + coagulopathy_24h + mechanical_ventilation +
-    massive_hemorrhage + head_mais_group + high_risk_mechanism +
-    self_injury + external_mais_group,
-  family = binomial(link = "logit"),
-  data = selection_training_data,
-  na.action = na.fail
-)
-summary(new3)
-
-# Likelihood-ratio test: does self_injury improve the model that already
-# includes high_risk_mechanism?
-anova(new, new3, test = "Chisq")
-```
-
-```{r self-injury-performance, echo=FALSE}
-self_injury_models <- list(
-  "Without high-risk mechanism and self-injury" = new2,
-  "With high-risk mechanism" = new,
-  "With high-risk mechanism and self-injury" = new3
-)
-
-self_injury_performance <- do.call(rbind, lapply(
-  names(self_injury_models),
-  function(model_name) {
-    model <- self_injury_models[[model_name]]
-    n_terms <- length(attr(terms(model), "term.labels"))
-    rbind(
-      evaluate_selection_predictions(
-        method = model_name,
-        sample_name = "Training (2020-2023)",
-        observed = selection_training_data$mortality_30d,
-        predicted_probability = predict(
-          model, newdata = selection_training_data, type = "response"
-        ),
-        number_of_selected_predictors = n_terms
-      ),
-      evaluate_selection_predictions(
-        method = model_name,
-        sample_name = "Validation (2024-2025)",
-        observed = selection_test_data$mortality_30d,
-        predicted_probability = predict(
-          model, newdata = selection_test_data, type = "response"
-        ),
-        number_of_selected_predictors = n_terms
-      )
-    )
-  }
-))
-
-performance_columns_si <- c("AUC", "AUC 95% CI lower", "AUC 95% CI upper",
-                            "Brier score")
-self_injury_performance[performance_columns_si] <- lapply(
-  self_injury_performance[performance_columns_si], round, digits = 3
-)
-
-knitr::kable(
-  self_injury_performance,
-  align = c("l", "l", rep("r", 7)),
-  caption = paste(
-    "Training and validation performance of the final model without",
-    "and with self-injury (DeLong 95% AUC confidence intervals)"
-  )
-)
-```
-
-Paired DeLong tests of the validation AUC of the model with `self_injury`
-against the other two versions:
-
-```{r self-injury-delong, echo=FALSE}
-validation_roc <- lapply(self_injury_models, function(model) {
-  pROC::roc(
-    response = selection_test_data$mortality_30d,
-    predictor = predict(model, newdata = selection_test_data, type = "response"),
-    levels = c(0, 1), direction = "<", quiet = TRUE
-  )
-})
-
-reference_roc <- validation_roc[["With high-risk mechanism and self-injury"]]
-comparison_names <- c("With high-risk mechanism",
-                      "Without high-risk mechanism and self-injury")
-
-delong_self_injury <- data.frame(
-  Comparison = paste("Model with self-injury vs. model:", comparison_names),
-  `AUC difference` = vapply(comparison_names, function(nm) {
-    as.numeric(pROC::auc(reference_roc) - pROC::auc(validation_roc[[nm]]))
-  }, numeric(1)),
-  `DeLong p` = vapply(comparison_names, function(nm) {
-    format.pval(
-      pROC::roc.test(reference_roc, validation_roc[[nm]],
-                     method = "delong")$p.value,
-      digits = 3, eps = 0.001
-    )
-  }, character(1)),
-  check.names = FALSE,
-  row.names = NULL
-)
-delong_self_injury$`AUC difference` <- round(delong_self_injury$`AUC difference`, 4)
-
-knitr::kable(
-  delong_self_injury,
-  align = c("l", "r", "r"),
-  caption = "Paired DeLong test of the validation AUC: model with self-injury versus the other versions"
-)
-```
 
 # Mortality by score: model with the first LASSO variables
 
@@ -2192,7 +2055,8 @@ score_group <- cut(
 names(score_group) <- score_range
 
 plot_score_mortality <- function(score_table, sample_label,
-                                 model_label = "the LASSO-selected variables") {
+                                 model_label = "the LASSO-selected variables",
+                                 left_expand = 3.8, labels_at_axis = FALSE) {
   d <- merge(
     data.frame(score = score_range), score_table, by = "score", all.x = TRUE
   )
@@ -2231,12 +2095,18 @@ plot_score_mortality <- function(score_table, sample_label,
     geom_text(aes(y = -6, label = score_label), size = 3.1, fontface = "bold") +
     geom_text(aes(y = -12, label = pct_label), size = 2.9) +
     geom_text(aes(y = -18, label = n), size = 2.7, colour = "grey30") +
-    annotate("text", x = x_first - 0.75, y = c(-6, -12, -18), hjust = 1,
+    annotate("text",
+             x = if (labels_at_axis) x_first - left_expand + 0.1 else x_first - 0.75,
+             y = c(-6, -12, -18), hjust = if (labels_at_axis) 0 else 1,
              label = c("Score", "Mortality %", "n"), size = 3.1,
              fontface = "bold") +
     scale_fill_manual(values = risk_group_colours, drop = FALSE,
                       name = "Risk group") +
-    scale_x_continuous(breaks = NULL, expand = expansion(add = c(3.8, 0.7))) +
+    scale_x_continuous(
+      breaks = NULL,
+      limits = if (labels_at_axis) c(x_first - left_expand, max(d$score) + 0.7),
+      expand = if (labels_at_axis) c(0, 0) else expansion(add = c(left_expand, 0.7))
+    ) +
     scale_y_continuous(
       breaks = seq(0, 100, 10), limits = c(-21, 100), expand = c(0, 0)
     ) +
@@ -2258,14 +2128,6 @@ plot_score_mortality <- function(score_table, sample_label,
     coord_cartesian(clip = "off")
 }
 ```
-
-## Training sample (2020-2023)
-
-```{r score-plot-training, fig.width=12, fig.height=6.5, dpi=96, fig.retina=3.125}
-plot_score_mortality(training_score_table, "Training sample (2020-2023)")
-```
-
-## Risk groups (derivation sample)
 
 ```{r risk-group-functions}
 risk_group_fill <- c(
@@ -2298,7 +2160,8 @@ risk_group_summary <- function(score_table) {
 }
 
 # Table in the style of the RETRASCORE risk-group table (Points, % risk, Groups)
-plot_risk_table <- function(score_table, model_label) {
+plot_risk_table <- function(score_table, model_label, show_title = TRUE,
+                            fixed_ends = FALSE) {
   s <- risk_group_summary(score_table)
   k <- nrow(s)
   fmt <- function(x) ifelse(x < 10, sprintf("%.1f", x), sprintf("%.0f", x))
@@ -2314,6 +2177,10 @@ plot_risk_table <- function(score_table, model_label) {
     s$risk_min == s$risk_max, paste0(fmt(s$risk_min), " %"),
     paste0(fmt(s$risk_min), " - ", fmt(s$risk_max), " %")
   )
+  if (fixed_ends) {
+    s$risk_label[1] <- "< 5 %"
+    s$risk_label[k] <- "> 85 %"
+  }
   s$group_name <- toupper(sub(" \\(.*$", "", s$group))
   s$fill <- risk_group_fill[sub(" \\(.*$", "", s$group)]
   s$row <- k - seq_len(k)          # first group at the top
@@ -2330,52 +2197,28 @@ plot_risk_table <- function(score_table, model_label) {
   cells$xmin <- col_x[cells$col]
   cells$xmax <- col_x[cells$col + 1]
 
+  title_labs <- if (show_title) {
+    labs(
+      title = "Risk groups of the score (derivation sample, 2020-2023)",
+      subtitle = paste0("Score from the logistic model with ", model_label,
+                        ".\n% risk = range of the observed 30-day mortality",
+                        " of the score values in each group.")
+    )
+  } else {
+    NULL
+  }
+
   ggplot(cells) +
     geom_rect(aes(xmin = xmin, xmax = xmax, ymin = row, ymax = row + 1,
                   fill = fill), colour = "black", linewidth = 0.8) +
     geom_text(aes(x = (xmin + xmax) / 2, y = row + 0.5, label = label,
                   fontface = ifelse(bold, "bold", "plain")), size = 6) +
     scale_fill_identity() +
-    labs(
-      title = "Risk groups of the score (derivation sample, 2020-2023)",
-      subtitle = paste0("Score from the logistic model with ", model_label,
-                        ".\n% risk = range of the observed 30-day mortality",
-                        " of the score values in each group.")
-    ) +
+    title_labs +
     coord_cartesian(clip = "off") +
     theme_void(base_size = 12) +
     theme(plot.subtitle = element_text(size = 9), plot.margin = margin(8, 12, 8, 12))
 }
-```
-
-```{r risk-table-lasso, fig.width=8, fig.height=4.6, dpi=96, fig.retina=3.125}
-plot_risk_table(training_score_table, "the LASSO-selected variables")
-```
-
-```{r risk-table-lasso-n, echo=FALSE}
-risk_group_summary_lasso <- risk_group_summary(training_score_table)
-knitr::kable(
-  data.frame(
-    Group = risk_group_summary_lasso$group,
-    Points = ifelse(
-      risk_group_summary_lasso$points_min == risk_group_summary_lasso$points_max,
-      risk_group_summary_lasso$points_min,
-      paste(risk_group_summary_lasso$points_min, "-", risk_group_summary_lasso$points_max)
-    ),
-    `n patients` = risk_group_summary_lasso$n,
-    Deaths = risk_group_summary_lasso$deaths,
-    `Observed mortality (%)` = round(risk_group_summary_lasso$pooled, 1),
-    check.names = FALSE
-  ),
-  align = c("l", "r", "r", "r", "r"),
-  caption = "Derivation sample (2020-2023): patients and 30-day mortality in each risk group"
-)
-```
-
-## Validation sample (2024-2025)
-
-```{r score-plot-validation, fig.width=12, fig.height=6.5, dpi=96, fig.retina=3.125}
-plot_score_mortality(validation_score_table, "Validation sample (2024-2025)")
 ```
 
 # Mortality by score: same model without the external MAIS
@@ -2448,18 +2291,26 @@ model_label_no_external <- "the LASSO-selected variables except the external MAI
 ```{r score-plot-training-no-external, fig.width=12, fig.height=6.5, dpi=96, fig.retina=3.125}
 plot_score_mortality(
   training_score_table, "Training sample (2020-2023)",
-  model_label = model_label_no_external
+  model_label = model_label_no_external, left_expand = 2.6,
+  labels_at_axis = TRUE
 )
 ```
 
 ## Risk groups (derivation sample), without external MAIS
 
 ```{r risk-table-no-external, fig.width=8, fig.height=4.6, dpi=96, fig.retina=3.125}
-plot_risk_table(training_score_table, model_label_no_external)
+# Final table only: extreme risk is strictly > 85 % (a rate of exactly 85 %
+# stays in "Very high"), and no title/subtitle. score_group is restored after
+# the table so the validation plot below keeps the original bands.
+score_group_original <- score_group
+score_group[training_rate == 85] <- risk_group_labels[5]
+plot_risk_table(training_score_table, model_label_no_external, show_title = FALSE,
+                fixed_ends = TRUE)
 ```
 
 ```{r risk-table-no-external-n, echo=FALSE}
 risk_group_summary_ne <- risk_group_summary(training_score_table)
+score_group <- score_group_original
 knitr::kable(
   data.frame(
     Group = risk_group_summary_ne$group,

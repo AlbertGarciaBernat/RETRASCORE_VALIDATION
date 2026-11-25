@@ -404,14 +404,16 @@ injury_type <- factor(
   )
 )
 
-# High-risk mechanism depends only on the mechanism of injury. Self-injury is
-# no longer part of its definition (previously, precipitation counted as high
-# risk only when it was a self-injury); it is now an independent variable.
+# Every patient whose intent is self-injury (autolysis) is high risk, whatever
+# the actual mechanism of the injury.
 high_risk_mechanism <- case_when(
+  clean_intent == "intencionado : autolisis" ~ 1L,
   clean_mechanism %in% c(
     "arma de fuego", "atropello", "caida accidental", "otros/desconocido"
   ) ~ 1L,
-  !is.na(clean_mechanism) ~ 0L,
+  !is.na(clean_mechanism) & clean_mechanism != "precipitacion" ~ 0L,
+  clean_mechanism == "precipitacion" &
+    !is.na(clean_intent) ~ 0L,
   TRUE ~ NA_integer_
 )
 
@@ -1974,9 +1976,10 @@ summary(new2)
 
 # Effect of adding self-injury to the model
 
-`self_injury` is now an independent binary variable (1 = self-injury) that is
-separate from `high_risk_mechanism`, and it is offered as a candidate predictor
-in the variable selection above. This section compares three versions of the
+`self_injury` is an independent binary variable (1 = self-injury intent). Every
+patient with self-injury intent is also coded as `high_risk_mechanism` = 1,
+whatever the mechanism, so `self_injury` is a subset of `high_risk_mechanism`.
+It is offered as a candidate predictor in the variable selection above. This section compares three versions of the
 final model: without `high_risk_mechanism`, with it, and with
 `high_risk_mechanism` plus `self_injury`. The models are fitted in the training
 sample (2020-2023) and the validation sample (2024-2025) is used only to
@@ -2088,5 +2091,424 @@ knitr::kable(
   delong_self_injury,
   align = c("l", "r", "r"),
   caption = "Paired DeLong test of the validation AUC: model with self-injury versus the other versions"
+)
+```
+
+# Mortality by score: model with the first LASSO variables
+
+This section converts the logistic model fitted with the variables selected by
+the first LASSO (`lasso_refit_model`, training sample 2020-2023) into a
+points score, in the style of the RETRASCORE figure. Each coefficient is
+divided by `log_odds_per_point` (1 point = 0.5 log-odds) and rounded to the
+nearest integer, keeping at least 1 point for every retained term; the score of
+a patient is the sum of the points of the risk factors present. The bars show
+the observed 30-day mortality for each score value (scores of
+`score_cap_high` or more are pooled in the last bar), the dotted line is a
+second-degree polynomial trend line, and the table below the bars gives the
+score, the observed mortality (%) and the number of patients. The colours are
+the risk groups, defined with the same mortality bands as in the original
+figure applied to the observed mortality of the training sample, so that a
+score has the same colour in both figures.
+
+```{r score-points}
+library(ggplot2)
+
+# ---- Points of the RETRASCORE-style score -----------------------------------
+# 1 point = `log_odds_per_point` log-odds of the logistic model fitted with the
+# LASSO-selected variables. Every coefficient is divided by this value and
+# rounded; each retained term keeps at least 1 point (in absolute value).
+log_odds_per_point <- 0.5
+score_cap_high <- 17L          # scores >= this value (i.e. > 16) are pooled in one bar
+
+score_model <- lasso_refit_model
+score_coefficients <- coef(score_model)[-1]
+score_points <- sign(score_coefficients) *
+  pmax(1, round(abs(score_coefficients) / log_odds_per_point))
+
+score_points_table <- data.frame(
+  Term = names(score_points),
+  Coefficient = round(unname(score_coefficients), 3),
+  Points = unname(score_points),
+  row.names = NULL
+)
+knitr::kable(
+  score_points_table,
+  align = c("l", "r", "r"),
+  caption = paste0(
+    "Points of the score derived from the logistic model with the ",
+    "LASSO-selected variables (1 point = ", log_odds_per_point, " log-odds)"
+  )
+)
+```
+
+```{r score-tables}
+patient_score <- function(data) {
+  design <- model.matrix(
+    delete.response(terms(score_model)),
+    data = data, xlev = score_model$xlevels
+  )[, names(score_points), drop = FALSE]
+  as.numeric(design %*% score_points)
+}
+
+score_by_value <- function(data) {
+  score <- pmin(patient_score(data), score_cap_high)
+  out <- aggregate(
+    data[[outcome_variable]], by = list(score = score),
+    FUN = function(x) c(n = length(x), deaths = sum(x))
+  )
+  out <- data.frame(score = out$score, out$x)
+  out$mortality <- 100 * out$deaths / out$n
+  out
+}
+
+training_score_table <- score_by_value(selection_training_data)
+validation_score_table <- score_by_value(selection_test_data)
+
+# Risk groups: same bands as the RETRASCORE figure, applied to the observed
+# 30-day mortality of the TRAINING sample (made monotone with cummax) so that a
+# given score has the same colour in the training and the validation figure.
+risk_group_labels <- c(
+  "Very low (< 5 %)", "Low (5-<20 %)", "Medium (20-<40 %)",
+  "High (40-<70 %)", "Very high (70-<85 %)", "Extreme (>= 85 %)"
+)
+risk_group_colours <- c(
+  "#4e8a3e", "#fbe8b1", "#ffd966", "#c55a11", "#e8372c", "#c00000"
+)
+names(risk_group_colours) <- risk_group_labels
+
+score_range <- seq(
+  min(training_score_table$score, validation_score_table$score),
+  score_cap_high
+)
+training_rate <- training_score_table$mortality[
+  match(score_range, training_score_table$score)
+]
+training_rate[is.na(training_rate)] <- 0
+training_rate <- cummax(training_rate)
+score_group <- cut(
+  training_rate, breaks = c(-Inf, 5, 20, 40, 70, 85, Inf), right = FALSE,
+  labels = risk_group_labels
+)
+names(score_group) <- score_range
+
+plot_score_mortality <- function(score_table, sample_label,
+                                 model_label = "the LASSO-selected variables",
+                                 left_expand = 3.8, labels_at_axis = FALSE) {
+  d <- merge(
+    data.frame(score = score_range), score_table, by = "score", all.x = TRUE
+  )
+  d$n[is.na(d$n)] <- 0
+  d$mortality[is.na(d$mortality)] <- 0
+  d$group <- score_group[as.character(d$score)]
+  d$pct_label <- ifelse(
+    d$n == 0, "-", ifelse(d$mortality < 10, sprintf("%.1f", d$mortality),
+                          sprintf("%.0f", d$mortality))
+  )
+  d$score_label <- ifelse(
+    d$score == score_cap_high, paste0(">", score_cap_high - 1L), d$score
+  )
+  x_first <- min(d$score)
+
+  # Dotted polynomial (degree 2) trend line of the bars, as in the original
+  # figure; only the part between 0 and 100 % is drawn.
+  fit <- lm(mortality ~ poly(score, 2), data = d[d$n > 0, ])
+  trend <- data.frame(score = seq(min(d$score), max(d$score), length.out = 200))
+  trend$fitted <- predict(fit, newdata = trend)
+  trend <- trend[trend$fitted >= 0 & trend$fitted <= 100, ]
+
+  ggplot(d, aes(x = score, y = mortality)) +
+    geom_col(aes(fill = group), width = 0.6) +
+    geom_line(
+      data = trend, aes(x = score, y = fitted), inherit.aes = FALSE,
+      colour = "#2a78d6", linetype = "dotted", linewidth = 0.9
+    ) +
+    # Data table under the bars: score, % mortality and n
+    geom_tile(aes(y = -6), width = 1, height = 5.5, fill = "white",
+              colour = "grey70", linewidth = 0.3) +
+    geom_tile(aes(y = -12), width = 1, height = 5.5, fill = "white",
+              colour = "grey70", linewidth = 0.3) +
+    geom_tile(aes(y = -18), width = 1, height = 5.5, fill = "white",
+              colour = "grey70", linewidth = 0.3) +
+    geom_text(aes(y = -6, label = score_label), size = 3.1, fontface = "bold") +
+    geom_text(aes(y = -12, label = pct_label), size = 2.9) +
+    geom_text(aes(y = -18, label = n), size = 2.7, colour = "grey30") +
+    annotate("text",
+             x = if (labels_at_axis) x_first - left_expand + 0.1 else x_first - 0.75,
+             y = c(-6, -12, -18), hjust = if (labels_at_axis) 0 else 1,
+             label = c("Score", "Mortality %", "n"), size = 3.1,
+             fontface = "bold") +
+    scale_fill_manual(values = risk_group_colours, drop = FALSE,
+                      name = "Risk group") +
+    scale_x_continuous(
+      breaks = NULL,
+      limits = if (labels_at_axis) c(x_first - left_expand, max(d$score) + 0.7),
+      expand = if (labels_at_axis) c(0, 0) else expansion(add = c(left_expand, 0.7))
+    ) +
+    scale_y_continuous(
+      breaks = seq(0, 100, 10), limits = c(-21, 100), expand = c(0, 0)
+    ) +
+    labs(
+      title = "30-day mortality by score",
+      subtitle = paste0(
+        sample_label, ". Score from the logistic model with ",
+        model_label, " (1 point = ", log_odds_per_point, " log-odds)."
+      ),
+      x = NULL, y = "Mortality %"
+    ) +
+    theme_minimal(base_size = 12) +
+    theme(
+      panel.grid.minor = element_blank(),
+      panel.grid.major.x = element_blank(),
+      legend.position = "top",
+      plot.subtitle = element_text(size = 9.5)
+    ) +
+    coord_cartesian(clip = "off")
+}
+```
+
+## Training sample (2020-2023)
+
+```{r score-plot-training, fig.width=12, fig.height=6.5, dpi=96, fig.retina=3.125}
+plot_score_mortality(training_score_table, "Training sample (2020-2023)")
+```
+
+## Risk groups (derivation sample)
+
+```{r risk-group-functions}
+risk_group_fill <- c(
+  "Very low" = "#A9D18E", "Low" = "#FFF2CC", "Medium" = "#FFD966",
+  "High" = "#BF9000", "Very high" = "#FF0000", "Extreme" = "#FF0000"
+)
+
+# One row per risk group, for the derivation (training) sample.
+risk_group_summary <- function(score_table) {
+  d <- merge(
+    data.frame(score = score_range, group = score_group[as.character(score_range)]),
+    score_table, by = "score", all.x = TRUE
+  )
+  d$n[is.na(d$n)] <- 0
+  d$deaths[is.na(d$deaths)] <- 0
+  groups <- levels(droplevels(d$group))
+  rows <- lapply(groups, function(g) {
+    x <- d[d$group == g, ]
+    seen <- x[x$n > 0, ]
+    data.frame(
+      group = g,
+      points_min = min(x$score), points_max = max(x$score),
+      n = sum(x$n), deaths = sum(x$deaths),
+      risk_min = min(seen$mortality), risk_max = max(seen$mortality)
+    )
+  })
+  out <- do.call(rbind, rows)
+  out$pooled <- 100 * out$deaths / out$n
+  out
+}
+
+# Table in the style of the RETRASCORE risk-group table (Points, % risk, Groups)
+plot_risk_table <- function(score_table, model_label, show_title = TRUE,
+                            fixed_ends = FALSE) {
+  s <- risk_group_summary(score_table)
+  k <- nrow(s)
+  fmt <- function(x) ifelse(x < 10, sprintf("%.1f", x), sprintf("%.0f", x))
+  s$points_label <- ifelse(
+    s$points_min == s$points_max, s$points_min,
+    paste(s$points_min, "-", s$points_max)
+  )
+  if (k > 1) {
+    s$points_label[1] <- paste("<", s$points_min[2])
+    s$points_label[k] <- paste(">", s$points_max[k - 1])
+  }
+  s$risk_label <- ifelse(
+    s$risk_min == s$risk_max, paste0(fmt(s$risk_min), " %"),
+    paste0(fmt(s$risk_min), " - ", fmt(s$risk_max), " %")
+  )
+  if (fixed_ends) {
+    s$risk_label[1] <- "< 5 %"
+    s$risk_label[k] <- "> 85 %"
+  }
+  s$group_name <- toupper(sub(" \\(.*$", "", s$group))
+  s$fill <- risk_group_fill[sub(" \\(.*$", "", s$group)]
+  s$row <- k - seq_len(k)          # first group at the top
+
+  col_x <- c(0, 1.4, 3.2, 5.2)
+  cells <- rbind(
+    data.frame(col = 1, row = k, label = "POINTS", fill = "white", bold = TRUE),
+    data.frame(col = 2, row = k, label = "% RISK", fill = "white", bold = TRUE),
+    data.frame(col = 3, row = k, label = "GROUPS", fill = "white", bold = TRUE),
+    data.frame(col = 1, row = s$row, label = s$points_label, fill = "white", bold = TRUE),
+    data.frame(col = 2, row = s$row, label = s$risk_label, fill = s$fill, bold = FALSE),
+    data.frame(col = 3, row = s$row, label = s$group_name, fill = "white", bold = FALSE)
+  )
+  cells$xmin <- col_x[cells$col]
+  cells$xmax <- col_x[cells$col + 1]
+
+  title_labs <- if (show_title) {
+    labs(
+      title = "Risk groups of the score (derivation sample, 2020-2023)",
+      subtitle = paste0("Score from the logistic model with ", model_label,
+                        ".\n% risk = range of the observed 30-day mortality",
+                        " of the score values in each group.")
+    )
+  } else {
+    NULL
+  }
+
+  ggplot(cells) +
+    geom_rect(aes(xmin = xmin, xmax = xmax, ymin = row, ymax = row + 1,
+                  fill = fill), colour = "black", linewidth = 0.8) +
+    geom_text(aes(x = (xmin + xmax) / 2, y = row + 0.5, label = label,
+                  fontface = ifelse(bold, "bold", "plain")), size = 6) +
+    scale_fill_identity() +
+    title_labs +
+    coord_cartesian(clip = "off") +
+    theme_void(base_size = 12) +
+    theme(plot.subtitle = element_text(size = 9), plot.margin = margin(8, 12, 8, 12))
+}
+```
+
+```{r risk-table-lasso, fig.width=8, fig.height=4.6, dpi=96, fig.retina=3.125}
+plot_risk_table(training_score_table, "the LASSO-selected variables")
+```
+
+```{r risk-table-lasso-n, echo=FALSE}
+risk_group_summary_lasso <- risk_group_summary(training_score_table)
+knitr::kable(
+  data.frame(
+    Group = risk_group_summary_lasso$group,
+    Points = ifelse(
+      risk_group_summary_lasso$points_min == risk_group_summary_lasso$points_max,
+      risk_group_summary_lasso$points_min,
+      paste(risk_group_summary_lasso$points_min, "-", risk_group_summary_lasso$points_max)
+    ),
+    `n patients` = risk_group_summary_lasso$n,
+    Deaths = risk_group_summary_lasso$deaths,
+    `Observed mortality (%)` = round(risk_group_summary_lasso$pooled, 1),
+    check.names = FALSE
+  ),
+  align = c("l", "r", "r", "r", "r"),
+  caption = "Derivation sample (2020-2023): patients and 30-day mortality in each risk group"
+)
+```
+
+## Validation sample (2024-2025)
+
+```{r score-plot-validation, fig.width=12, fig.height=6.5, dpi=96, fig.retina=3.125}
+plot_score_mortality(validation_score_table, "Validation sample (2024-2025)")
+```
+
+# Mortality by score: same model without the external MAIS
+
+Same analysis as above, but the logistic model is refitted without
+`external_mais_group` (the remaining variables selected by the first LASSO are
+kept). The points are recalculated from the new coefficients with the same
+rule (1 point = `log_odds_per_point` log-odds, rounded, at least 1 point per
+term), and the risk-group colours are again defined from the observed
+mortality of the training sample.
+
+```{r score-points-no-external}
+no_external_predictors <- setdiff(lasso_selected_predictors, "external_mais_group")
+
+score_model <- glm(
+  formula = reformulate(no_external_predictors, response = outcome_variable),
+  data = selection_training_data,
+  family = binomial(link = "logit"),
+  na.action = na.fail
+)
+if (!isTRUE(score_model$converged) || anyNA(coef(score_model))) {
+  stop("The logistic model without the external MAIS is not estimable.")
+}
+
+score_coefficients <- coef(score_model)[-1]
+score_points <- sign(score_coefficients) *
+  pmax(1, round(abs(score_coefficients) / log_odds_per_point))
+
+score_points_table <- data.frame(
+  Term = names(score_points),
+  Coefficient = round(unname(score_coefficients), 3),
+  Points = unname(score_points),
+  row.names = NULL
+)
+knitr::kable(
+  score_points_table,
+  align = c("l", "r", "r"),
+  caption = paste0(
+    "Points of the score derived from the logistic model with the ",
+    "LASSO-selected variables except the external MAIS (1 point = ",
+    log_odds_per_point, " log-odds)"
+  )
+)
+```
+
+```{r score-tables-no-external}
+training_score_table <- score_by_value(selection_training_data)
+validation_score_table <- score_by_value(selection_test_data)
+
+score_range <- seq(
+  min(training_score_table$score, validation_score_table$score),
+  score_cap_high
+)
+training_rate <- training_score_table$mortality[
+  match(score_range, training_score_table$score)
+]
+training_rate[is.na(training_rate)] <- 0
+training_rate <- cummax(training_rate)
+score_group <- cut(
+  training_rate, breaks = c(-Inf, 5, 20, 40, 70, 85, Inf), right = FALSE,
+  labels = risk_group_labels
+)
+names(score_group) <- score_range
+
+model_label_no_external <- "the LASSO-selected variables except the external MAIS"
+```
+
+## Training sample (2020-2023), without external MAIS
+
+```{r score-plot-training-no-external, fig.width=12, fig.height=6.5, dpi=96, fig.retina=3.125}
+plot_score_mortality(
+  training_score_table, "Training sample (2020-2023)",
+  model_label = model_label_no_external, left_expand = 2.6,
+  labels_at_axis = TRUE
+)
+```
+
+## Risk groups (derivation sample), without external MAIS
+
+```{r risk-table-no-external, fig.width=8, fig.height=4.6, dpi=96, fig.retina=3.125}
+# Final table only: extreme risk is strictly > 85 % (a rate of exactly 85 %
+# stays in "Very high"), and no title/subtitle. score_group is restored after
+# the table so the validation plot below keeps the original bands.
+score_group_original <- score_group
+score_group[training_rate == 85] <- risk_group_labels[5]
+plot_risk_table(training_score_table, model_label_no_external, show_title = FALSE,
+                fixed_ends = TRUE)
+```
+
+```{r risk-table-no-external-n, echo=FALSE}
+risk_group_summary_ne <- risk_group_summary(training_score_table)
+score_group <- score_group_original
+knitr::kable(
+  data.frame(
+    Group = risk_group_summary_ne$group,
+    Points = ifelse(
+      risk_group_summary_ne$points_min == risk_group_summary_ne$points_max,
+      risk_group_summary_ne$points_min,
+      paste(risk_group_summary_ne$points_min, "-", risk_group_summary_ne$points_max)
+    ),
+    `n patients` = risk_group_summary_ne$n,
+    Deaths = risk_group_summary_ne$deaths,
+    `Observed mortality (%)` = round(risk_group_summary_ne$pooled, 1),
+    check.names = FALSE
+  ),
+  align = c("l", "r", "r", "r", "r"),
+  caption = "Derivation sample (2020-2023), without external MAIS: patients and 30-day mortality in each risk group"
+)
+```
+
+## Validation sample (2024-2025), without external MAIS
+
+```{r score-plot-validation-no-external, fig.width=12, fig.height=6.5, dpi=96, fig.retina=3.125}
+plot_score_mortality(
+  validation_score_table, "Validation sample (2024-2025)",
+  model_label = model_label_no_external
 )
 ```
